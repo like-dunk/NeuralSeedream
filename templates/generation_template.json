@@ -1,0 +1,41 @@
+{
+  "name": "海洋至尊01",
+  "description": "AI图片生成配置",
+  "mode": "scene_generation",
+  "group_count": 3,
+  "images_per_group": [2, 4],
+
+  "product_images": {
+    "source_dir": "产品图/海洋至尊",
+    "specified_images": [],
+    "specified_coverage": 100
+  },
+
+  "reference_images": {
+    "source_dir": "参考图/化妆品家用场景",
+    "specified_images": []
+  },
+
+  "prompts": {
+    "source_dir_scene": "Prompt/图片生成/场景生成",
+    "source_dir_transfer": "Prompt/图片生成/主体迁移",
+    "selection_mode": "random",
+    "unique_per_group": true,
+    "specified_prompts": [],
+    "custom_template": null
+  },
+
+  "output": {
+    "base_dir": "./outputs",
+    "aspect_ratio": "4:5",
+    "resolution": "2K",
+    "format": "png",
+    "max_concurrent_groups": 3
+  },
+
+  "template_variables": {
+    "product_name": "海洋至尊护肤套装",
+    "brand": "海洋至尊",
+    "style": "清新自然"
+  }
+}

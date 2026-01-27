@@ -1,0 +1,13 @@
+{
+  "kieai": {
+    "api_key": "your_kieai_api_key_here",
+    "base_url": "https://api.kie.ai/api/v1",
+    "model": "nano-banana-pro"
+  },
+  "moss": {
+    "base_url": "your_moss_base_url",
+    "access_key_id": "your_moss_access_key_id",
+    "access_key_secret": "your_moss_access_key_secret",
+    "bucket_name": "your_bucket_name"
+  }
+}
