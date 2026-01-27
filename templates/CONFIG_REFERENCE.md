@@ -152,7 +152,7 @@ outputs/
 
 ## template_variables 模板变量
 
-自定义变量，可在 Prompt 模板中使用 `{{ 变量名 }}` 引用。
+自定义变量，可在 Prompt（.j2）模板中使用 `{{ 变量名 }}` 引用。
 
 示例：
 ```json
@@ -167,7 +167,7 @@ outputs/
 ```
 请为 {{ brand }} 的 {{ product_name }} 生成一张 {{ style }} 风格的产品图
 ```
-
+用途：让同一个 Prompt 模板可以复用，只需要改配置文件里的变量值，不用改 Prompt 文件本身。
 ---
 
 ## 完整配置示例
