@@ -146,12 +146,12 @@ class ImageSelector:
         
         return images
     
-    def load_prompts_from_json(self, directory: Path) -> List[PromptItem]:
+    def load_prompts_from_json(self, path: Path) -> List[PromptItem]:
         """
-        从目录下的 prompts.json 加载 Prompt 列表
+        从 JSON 文件加载 Prompt 列表
 
         Args:
-            directory: Prompt 目录路径
+            path: Prompt JSON 文件路径（可以是 .json 文件或包含 prompts.json 的目录）
 
         Returns:
             PromptItem 对象列表（仅包含 enabled=true 的）
@@ -159,7 +159,17 @@ class ImageSelector:
         Raises:
             SelectionError: 如果 JSON 文件不存在或格式错误
         """
-        json_path = directory / "prompts.json"
+        # 支持两种方式：直接指定 JSON 文件，或指定包含 prompts.json 的目录
+        if path.is_file():
+            json_path = path
+        elif path.is_dir():
+            json_path = path / "prompts.json"
+        else:
+            # 路径不存在，尝试判断是文件还是目录
+            if str(path).endswith('.json'):
+                json_path = path
+            else:
+                json_path = path / "prompts.json"
 
         if not json_path.exists():
             raise SelectionError(f"Prompt 配置文件不存在: {json_path}")

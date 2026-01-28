@@ -12,7 +12,7 @@
   },
 
   "scene_prompts": {
-    "source_dir": "Prompt/图片生成/场景生成",
+    "source_dir": "prompts/scene_generation.json",
     "specified_prompts": [],
     "custom_template": null
   },

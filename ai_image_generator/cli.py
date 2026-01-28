@@ -93,12 +93,15 @@ def create_engine(
     
     if image_service == "openrouter":
         logging.info(f"📡 使用 OpenRouter 图片生成服务, model={global_config.openrouter_image_model}")
+        if global_config.openrouter_image_proxy:
+            logging.info(f"📡 使用代理: {global_config.openrouter_image_proxy.split('@')[-1]}")
         api_client = OpenRouterImageClient(
             api_key=global_config.openrouter_image_api_key,
             base_url=global_config.openrouter_image_base_url,
             model=global_config.openrouter_image_model,
             site_url=global_config.openrouter_image_site_url,
             site_name=global_config.openrouter_image_site_name,
+            proxy=global_config.openrouter_image_proxy or None,
         )
     else:
         logging.info(f"📡 使用 KieAI 图片生成服务, model={global_config.model}")
@@ -129,6 +132,7 @@ def create_engine(
             model=global_config.openrouter_model,
             site_url=global_config.openrouter_site_url,
             site_name=global_config.openrouter_site_name,
+            proxy=global_config.openrouter_proxy or None,
         )
         
         # 加载 Few-shot 样本

@@ -54,6 +54,7 @@ class GlobalConfig:
     openrouter_image_model: str = "google/gemini-3-pro-image-preview"
     openrouter_image_site_url: str = ""
     openrouter_image_site_name: str = ""
+    openrouter_image_proxy: str = ""  # 代理地址
     
     # OpenRouter 文案生成配置（保持原有）
     openrouter_api_key: str = ""
@@ -61,6 +62,7 @@ class GlobalConfig:
     openrouter_model: str = ""
     openrouter_site_url: str = ""
     openrouter_site_name: str = ""
+    openrouter_proxy: str = ""  # 代理地址
 
 
 @dataclass
@@ -95,7 +97,7 @@ class ScenePromptConfig:
     - 指定的 prompts 只占用对应数量的组，剩余组继续随机
     - prompt 用完后才会复用
     """
-    source_dir: str = "Prompt/图片生成/场景生成"
+    source_dir: str = "prompts/scene_generation.json"
     specified_prompts: List[str] = field(default_factory=list)  # 指定的 prompt ID 列表
     custom_template: Optional[str] = None  # 自定义模板内容（优先级最高）
 
@@ -110,7 +112,7 @@ class TransferPromptConfig:
     - 默认随机选择一个，也可以指定
     - 指定后所有组都使用该 prompt
     """
-    source_dir: str = "Prompt/图片生成/主体迁移"
+    source_dir: str = "prompts/subject_transfer.json"
     specified_prompt: Optional[str] = None  # 指定的单个 prompt ID
     custom_template: Optional[str] = None  # 自定义模板内容（优先级最高）
 
@@ -122,7 +124,7 @@ class OutputConfig:
     aspect_ratio: str = "4:5"
     resolution: str = "2K"
     format: str = "png"
-    max_concurrent_groups: int = 3  # 最大并发组数
+    max_concurrent_groups: int = 10  # 最大并发组数
     generate_text: bool = True  # 是否生成文案
 
 

@@ -105,8 +105,12 @@ class ConfigManager:
         # 验证：根据选择的服务检查必需的配置
         if image_service == "kieai" and not kieai_api_key:
             raise ConfigurationError("使用 KieAI 服务需要配置 kieai.api_key", field="kieai.api_key")
-        if image_service == "openrouter" and not openrouter_image_api_key:
-            raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.api_key", field="openrouter.api_key")
+        if image_service == "openrouter":
+            if not openrouter_image_api_key:
+                raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.api_key", field="openrouter.api_key")
+            openrouter_proxy = openrouter_image_cfg.get("proxy") or os.getenv("OPENROUTER_PROXY") or openrouter_cfg.get("proxy", "")
+            if not openrouter_proxy:
+                raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.proxy（代理地址）", field="openrouter.proxy")
         
         self._global_config = GlobalConfig(
             # 服务选择
@@ -140,12 +144,18 @@ class ConfigManager:
                 os.getenv("OPENROUTER_SITE_NAME") or 
                 openrouter_cfg.get("site_name", "")
             ),
+            openrouter_image_proxy=(
+                openrouter_image_cfg.get("proxy") or 
+                os.getenv("OPENROUTER_PROXY") or 
+                openrouter_cfg.get("proxy", "")
+            ),
             # OpenRouter 文案生成配置（保持原有）
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or openrouter_cfg.get("api_key", ""),
             openrouter_base_url=os.getenv("OPENROUTER_BASE_URL") or openrouter_cfg.get("base_url", "https://openrouter.ai/api/v1"),
             openrouter_model=openrouter_cfg.get("model", "google/gemini-3-flash-preview"),
             openrouter_site_url=os.getenv("OPENROUTER_SITE_URL") or openrouter_cfg.get("site_url", ""),
             openrouter_site_name=os.getenv("OPENROUTER_SITE_NAME") or openrouter_cfg.get("site_name", ""),
+            openrouter_proxy=os.getenv("OPENROUTER_PROXY") or openrouter_cfg.get("proxy", ""),
         )
         
         return self._global_config
@@ -198,7 +208,7 @@ class ConfigManager:
         if "scene_prompts" in data:
             sp_cfg = data["scene_prompts"]
             scene_prompts = ScenePromptConfig(
-                source_dir=sp_cfg.get("source_dir", "Prompt/图片生成/场景生成"),
+                source_dir=sp_cfg.get("source_dir", "prompts/scene_generation.json"),
                 specified_prompts=sp_cfg.get("specified_prompts", []),
                 custom_template=sp_cfg.get("custom_template"),
             )
@@ -206,7 +216,7 @@ class ConfigManager:
         if "transfer_prompts" in data:
             tp_cfg = data["transfer_prompts"]
             transfer_prompts = TransferPromptConfig(
-                source_dir=tp_cfg.get("source_dir", "Prompt/图片生成/主体迁移"),
+                source_dir=tp_cfg.get("source_dir", "prompts/subject_transfer.json"),
                 specified_prompt=tp_cfg.get("specified_prompt"),
                 custom_template=tp_cfg.get("custom_template"),
             )
@@ -224,7 +234,7 @@ class ConfigManager:
             aspect_ratio=output_cfg.get("aspect_ratio", "4:5"),
             resolution=output_cfg.get("resolution", "2K"),
             format=output_cfg.get("format", "png"),
-            max_concurrent_groups=output_cfg.get("max_concurrent_groups", 3),
+            max_concurrent_groups=output_cfg.get("max_concurrent_groups", 10),
             generate_text=output_cfg.get("generate_text", True),
         )
         
@@ -232,8 +242,8 @@ class ConfigManager:
         text_gen_cfg = data.get("text_generation", {})
         text_generation = TextGenerationConfig(
             enabled=text_gen_cfg.get("enabled", True),
-            title_prompts_dir=text_gen_cfg.get("title_prompts_dir", "Prompt/文案生成/标题"),
-            content_prompts_dir=text_gen_cfg.get("content_prompts_dir", "Prompt/文案生成/文案"),
+            title_prompts_dir=text_gen_cfg.get("title_prompts_dir"),
+            content_prompts_dir=text_gen_cfg.get("content_prompts_dir"),
             max_few_shot_examples=text_gen_cfg.get("max_few_shot_examples", 5),
             tags=text_gen_cfg.get("tags", []),
         )

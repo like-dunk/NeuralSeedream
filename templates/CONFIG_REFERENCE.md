@@ -75,7 +75,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `source_dir` | string | ❌ | Prompt 目录，默认 `Prompt/图片生成/场景生成` |
+| `source_dir` | string | ❌ | Prompt JSON 文件路径，默认 `prompts/scene_generation.json` |
 | `specified_prompts` | string[] | ❌ | 指定优先使用的 Prompt ID 列表 |
 | `custom_template` | string | ❌ | 自定义 Prompt 字符串（优先级最高） |
 
@@ -124,7 +124,7 @@
 ```json
 {
   "scene_prompts": {
-    "source_dir": "Prompt/图片生成/场景生成",
+    "source_dir": "prompts/scene_generation.json",
     "specified_prompts": ["wood_desk_storage_box", "wood_desk_bunny"],
     "custom_template": null
   }
@@ -146,7 +146,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `source_dir` | string | ❌ | Prompt 目录，默认 `Prompt/图片生成/主体迁移` |
+| `source_dir` | string | ❌ | Prompt JSON 文件路径，默认 `prompts/subject_transfer.json` |
 | `specified_prompt` | string | ❌ | 指定使用的单个 Prompt ID |
 | `custom_template` | string | ❌ | 自定义 Prompt 字符串（优先级最高） |
 
@@ -195,7 +195,7 @@
 ```json
 {
   "transfer_prompts": {
-    "source_dir": "Prompt/图片生成/主体迁移",
+    "source_dir": "prompts/subject_transfer.json",
     "specified_prompt": "product_to_background",
     "custom_template": null
   }
@@ -264,8 +264,8 @@ outputs/
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `enabled` | bool | ❌ | `true` | 是否启用文案生成 |
-| `title_prompts_dir` | string | ❌ | `Prompt/文案生成/标题` | 标题样本目录（Few-shot） |
-| `content_prompts_dir` | string | ❌ | `Prompt/文案生成/文案` | 文案样本目录（Few-shot） |
+| `title_prompts_dir` | string | ❌ | - | 标题样本目录（Few-shot，可选） |
+| `content_prompts_dir` | string | ❌ | - | 文案样本目录（Few-shot，可选） |
 | `max_few_shot_examples` | int | ❌ | `5` | 最大 Few-shot 样本数 |
 
 ### 文案生成原理
@@ -385,13 +385,13 @@ outputs/
   },
 
   "scene_prompts": {
-    "source_dir": "Prompt/图片生成/场景生成",
+    "source_dir": "prompts/scene_generation.json",
     "specified_prompts": [],
     "custom_template": null
   },
 
   "transfer_prompts": {
-    "source_dir": "Prompt/图片生成/主体迁移",
+    "source_dir": "prompts/subject_transfer.json",
     "specified_prompt": null,
     "custom_template": null
   },
@@ -407,8 +407,6 @@ outputs/
 
   "text_generation": {
     "enabled": true,
-    "title_prompts_dir": "Prompt/文案生成/标题",
-    "content_prompts_dir": "Prompt/文案生成/文案",
     "max_few_shot_examples": 5
   },
 

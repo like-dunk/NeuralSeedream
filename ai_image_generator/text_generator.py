@@ -33,6 +33,7 @@ class TextGenerator:
         prompt_template_path: Optional[str] = None,
         reference_json_path: Optional[str] = None,
         reference_base_dir: Optional[str] = None,
+        proxy: Optional[str] = None,
     ):
         """
         初始化文案生成器
@@ -48,6 +49,7 @@ class TextGenerator:
             prompt_template_path: Jinja2 提示词模板路径
             reference_json_path: 参考文案 JSON 路径（已废弃，使用 reference_base_dir）
             reference_base_dir: 参考文案目录，按类别组织
+            proxy: 代理地址（如 http://user:pass@host:port）
         """
         self.api_key = api_key
         self.base_url = base_url
@@ -56,9 +58,10 @@ class TextGenerator:
         self.site_name = site_name
         self.temperature = temperature
         self.max_retries = max_retries
+        self.proxy = proxy
 
         # 模板和参考文案路径
-        self.prompt_template_path = Path(prompt_template_path) if prompt_template_path else Path("Prompt/文案生成/tittle_text.j2")
+        self.prompt_template_path = Path(prompt_template_path) if prompt_template_path else Path("prompts/text_template.j2")
 
         # 支持新旧两种方式
         if reference_base_dir:
@@ -73,9 +76,16 @@ class TextGenerator:
         # 初始化 OpenAI 异步客户端
         self.client: Optional[AsyncOpenAI] = None
         if api_key:
+            # 配置 httpx 客户端以支持代理
+            import httpx
+            http_client = None
+            if proxy:
+                http_client = httpx.AsyncClient(proxy=proxy)
+            
             self.client = AsyncOpenAI(
                 api_key=api_key,
-                base_url=base_url
+                base_url=base_url,
+                http_client=http_client,
             )
 
         # 初始化 Jinja2 环境

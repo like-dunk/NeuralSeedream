@@ -202,7 +202,7 @@ class APIClient:
                     result_urls=result_urls,
                 )
             
-            elif status == "failed":
+            elif status == "failed" or status == "fail":
                 fail_code = status_data.get("failCode", "")
                 fail_reason = status_data.get("failMsg") or status_data.get("failReason", "未知原因")
                 raise APIError(

@@ -83,7 +83,7 @@ python3 ai_image_generator.py -t templates/my_task.json
 
 | 参数 | 类型 | 必填 | 说明 | 示例 |
 |------|------|------|------|------|
-| `source_dir` | string | ❌ | Prompt模板目录 | `"Prompt/图片生成/场景生成"` |
+| `source_dir` | string | ❌ | Prompt JSON 文件路径 | `"prompts/scene_generation.json"` |
 | `selection_mode` | string | ❌ | 选择模式，默认random | `"random"` |
 | `unique_per_group` | bool | ❌ | 每组使用不同Prompt | `true` |
 | `custom_template` | string/null | ❌ | 自定义Prompt字符串 | `"生成一张..."` |
@@ -127,8 +127,8 @@ python3 ai_image_generator.py -t templates/my_task.json
 ## Prompt模板编写
 
 ### 文件位置
-- 场景生成：`Prompt/图片生成/场景生成/*.j2`
-- 主体迁移：`Prompt/图片生成/主体迁移/*.j2`
+- 场景生成：`prompts/scene_generation.json`
+- 主体迁移：`prompts/subject_transfer.json`
 
 ### 内置变量
 
@@ -200,7 +200,7 @@ python3 ai_image_generator.py -t templates/my_task.json
   },
   
   "prompts": {
-    "source_dir": "Prompt/图片生成/场景生成",
+    "source_dir": "prompts/scene_generation.json",
     "unique_per_group": true
   }
 }

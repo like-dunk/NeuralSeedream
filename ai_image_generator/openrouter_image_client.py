@@ -13,7 +13,6 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from openai import OpenAI
 
 from .exceptions import APIError
 from .models import TaskResult
@@ -32,6 +31,7 @@ class OpenRouterImageClient:
         site_url: Optional[str] = None,
         site_name: Optional[str] = None,
         timeout: float = 300.0,
+        proxy: Optional[str] = None,
     ):
         """
         初始化 OpenRouter 客户端
@@ -43,6 +43,7 @@ class OpenRouterImageClient:
             site_url: 站点 URL（用于 OpenRouter 统计）
             site_name: 站点名称
             timeout: 请求超时时间（秒）
+            proxy: 代理地址（如 http://user:pass@host:port）
         """
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -50,20 +51,7 @@ class OpenRouterImageClient:
         self.site_url = site_url
         self.site_name = site_name
         self.timeout = timeout
-        
-        # 构建默认 headers
-        default_headers = {}
-        if site_url:
-            default_headers["HTTP-Referer"] = site_url
-        if site_name:
-            default_headers["X-Title"] = site_name
-        
-        self.client = OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            default_headers=default_headers if default_headers else None,
-            timeout=self.timeout,
-        )
+        self.proxy = proxy
     
     def generate_image(
         self,
@@ -74,20 +62,18 @@ class OpenRouterImageClient:
         resolution: str = "2K",
         output_format: str = "png",
         log_prefix: str = "",
-        local_image_paths: Optional[List[Path]] = None,
     ) -> TaskResult:
         """
         生成图片
         
         Args:
             prompt: 生成提示词
-            image_urls: 输入图片 URL 列表（如果提供 local_image_paths 则忽略）
+            image_urls: 输入图片 URL 列表（会作为参考图片发送）
             output_path: 输出路径
             aspect_ratio: 宽高比（会添加到 prompt 中）
             resolution: 分辨率（会添加到 prompt 中）
             output_format: 输出格式
             log_prefix: 日志前缀
-            local_image_paths: 本地图片路径列表（优先使用，跳过 URL 下载）
             
         Returns:
             TaskResult: 任务结果
@@ -96,44 +82,65 @@ class OpenRouterImageClient:
         task_id = f"openrouter_{int(start_time * 1000)}"
         
         try:
-            # 构建消息内容（优先使用本地路径）
-            content = self._build_content(
-                prompt, 
-                image_urls, 
-                aspect_ratio, 
-                resolution,
-                local_image_paths=local_image_paths,
-            )
+            # 构建消息内容
+            content = self._build_content(prompt, image_urls, aspect_ratio, resolution)
             
-            logger.debug(f"{log_prefix} 发送请求到 OpenRouter, model={self.model}")
+            logger.debug(f"{log_prefix} 发送请求到 OpenRouter, model={self.model}, proxy={self.proxy}")
             
-            # 调用 API
-            # 参考: https://openrouter.ai/google/gemini-3-pro-image-preview
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # 直接使用 httpx 发送请求，避免 OpenAI SDK 解析 images 字段的问题
+            # 参考: https://openrouter.ai/docs/features/multimodal/image-generation
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            if self.site_url:
+                headers["HTTP-Referer"] = self.site_url
+            if self.site_name:
+                headers["X-Title"] = self.site_name
+            
+            payload = {
+                "model": self.model,
+                "messages": [
                     {
                         "role": "user",
                         "content": content,
                     }
                 ],
-                extra_body={
-                    "modalities": ["image", "text"],
-                },
-            )
+                "modalities": ["image", "text"],
+            }
+            
+            with httpx.Client(timeout=self.timeout, proxy=self.proxy) as http_client:
+                api_response = http_client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                api_response.raise_for_status()
+                response_data = api_response.json()
             
             elapsed = time.time() - start_time
             logger.debug(f"{log_prefix} API 响应耗时 {elapsed:.1f}秒")
+            logger.debug(f"{log_prefix} 响应数据: {str(response_data)[:500]}")
             
-            # 解析响应 - 按照官方示例
-            # response = response.choices[0].message
-            # if response.images:
-            #     for image in response.images:
-            #         image_url = image['image_url']['url']  # Base64 data URL
-            message = response.choices[0].message
+            # 解析响应 - 按照官方文档格式
+            # {
+            #   "choices": [{
+            #     "message": {
+            #       "images": [{
+            #         "type": "image_url",
+            #         "image_url": { "url": "data:image/png;base64,..." }
+            #       }]
+            #     }
+            #   }]
+            # }
+            choices = response_data.get("choices", [])
+            if not choices:
+                raise APIError(f"OpenRouter 响应无 choices: {response_data}", task_id=task_id)
+            
+            message = choices[0].get("message", {})
             
             # 提取图片 URL
-            image_url = self._extract_image_url(message)
+            image_url = self._extract_image_url_from_dict(message)
             
             if image_url:
                 # 保存图片
@@ -148,65 +155,56 @@ class OpenRouterImageClient:
                 )
             
             # 没有图片，检查文本响应
-            text_content = getattr(message, 'content', '') or ''
+            text_content = message.get('content', '') or ''
             logger.error(f"{log_prefix} API 未返回图片，响应: {text_content[:200]}")
             raise APIError(f"OpenRouter 未返回图片: {text_content[:100]}", task_id=task_id)
             
+        except httpx.HTTPStatusError as e:
+            logger.error(f"{log_prefix} OpenRouter HTTP 错误: {e.response.status_code} - {e.response.text[:200]}")
+            raise APIError(f"OpenRouter HTTP 错误: {e.response.status_code}", task_id=task_id)
         except Exception as e:
             if isinstance(e, APIError):
                 raise
             logger.error(f"{log_prefix} OpenRouter 请求失败: {e}")
             raise APIError(f"OpenRouter 请求失败: {e}", task_id=task_id)
     
-    def _extract_image_url(self, message) -> Optional[str]:
+    def _extract_image_url_from_dict(self, message: dict) -> Optional[str]:
         """
-        从响应消息中提取图片 URL
+        从响应消息字典中提取图片 URL
         
-        官方示例:
-            if response.images:
-                for image in response.images:
-                    image_url = image['image_url']['url']
+        响应格式:
+        {
+            "images": [{
+                "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,..." }
+            }]
+        }
         
         Args:
-            message: API 响应的 message 对象
+            message: API 响应的 message 字典
             
         Returns:
             图片的 base64 data URL，未找到返回 None
         """
-        # 方式1: message.images 属性（官方示例）
-        images = getattr(message, 'images', None)
+        # 方式1: message["images"] (官方文档格式)
+        images = message.get("images")
         if images:
             for image in images:
-                # image 可能是字典或对象
-                if isinstance(image, dict):
-                    url = image.get('image_url', {}).get('url')
-                else:
-                    # 尝试作为对象访问
-                    image_url_obj = getattr(image, 'image_url', None)
-                    if image_url_obj:
-                        url = image_url_obj.get('url') if isinstance(image_url_obj, dict) else getattr(image_url_obj, 'url', None)
-                    else:
-                        url = None
-                
+                # image["image_url"]["url"]
+                image_url = image.get("image_url", {})
+                url = image_url.get("url") if isinstance(image_url, dict) else None
                 if url:
                     return url
         
-        # 方式2: 检查 content 是否包含图片（某些模型可能用这种格式）
-        content = getattr(message, 'content', None)
-        if content:
-            # content 可能是字符串或列表
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict):
-                        if item.get('type') == 'image_url':
-                            url = item.get('image_url', {}).get('url')
-                            if url:
-                                return url
-                        elif item.get('type') == 'image':
-                            # 某些格式可能直接是 image 类型
-                            url = item.get('url') or item.get('data')
-                            if url:
-                                return url
+        # 方式2: 检查 content 是否包含图片
+        content = message.get("content")
+        if content and isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "image_url":
+                        url = item.get("image_url", {}).get("url")
+                        if url:
+                            return url
         
         return None
     
@@ -216,45 +214,32 @@ class OpenRouterImageClient:
         image_urls: List[str],
         aspect_ratio: str,
         resolution: str,
-        local_image_paths: Optional[List[Path]] = None,
     ) -> list:
         """
         构建消息内容（支持图片输入）
         
         Args:
             prompt: 提示词
-            image_urls: 输入图片 URL 列表（如果提供 local_image_paths 则忽略）
+            image_urls: 输入图片 URL 列表
             aspect_ratio: 宽高比
             resolution: 分辨率
-            local_image_paths: 本地图片路径列表（优先使用）
             
         Returns:
             消息内容列表
         """
         content = []
         
-        # 优先使用本地图片路径（直接转 base64，跳过网络下载）
-        if local_image_paths:
-            for path in local_image_paths:
-                data_url = self._local_file_to_base64_data_url(path)
-                if data_url:
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"url": data_url},
-                    })
-                else:
-                    logger.warning(f"无法读取本地图片: {path}")
-        else:
-            # 回退到 URL 方式（需要下载）
-            for url in image_urls:
-                data_url = self._url_to_base64_data_url(url)
-                if data_url:
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"url": data_url},
-                    })
-                else:
-                    logger.warning(f"无法转换图片 URL: {url}")
+        # 添加输入图片（作为参考）- 转换为 base64 data URL
+        # OpenRouter/Google 无法直接访问阿里云 OSS URL，需要转换
+        for url in image_urls:
+            data_url = self._url_to_base64_data_url(url)
+            if data_url:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": data_url},
+                })
+            else:
+                logger.warning(f"无法转换图片 URL: {url}")
         
         # 构建增强的提示词
         enhanced_prompt = prompt
@@ -270,47 +255,51 @@ class OpenRouterImageClient:
         
         return content
     
-    def _local_file_to_base64_data_url(self, path: Path) -> Optional[str]:
+    def _url_to_base64_data_url(self, url: str) -> Optional[str]:
         """
-        将本地图片文件转换为 base64 data URL
+        将图片 URL 下载并转换为 base64 data URL
+        
+        OpenRouter/Google 无法直接访问阿里云 OSS 等外部 URL，
+        需要先下载图片再转换为 base64 格式发送。
         
         Args:
-            path: 本地图片路径
+            url: 图片 URL
             
         Returns:
             base64 data URL (data:image/jpeg;base64,...) 或 None
         """
         try:
-            # 读取文件
-            with open(path, "rb") as f:
-                image_data = f.read()
+            # 下载图片（不走代理，直接访问 OSS）
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                response = client.get(url)
+                response.raise_for_status()
+            
+            image_data = response.content
             
             # 确定 MIME 类型
-            mime_type, _ = mimetypes.guess_type(str(path))
-            if not mime_type:
-                # 根据扩展名推断
-                ext = path.suffix.lower()
-                mime_map = {
-                    ".jpg": "image/jpeg",
-                    ".jpeg": "image/jpeg",
-                    ".png": "image/png",
-                    ".webp": "image/webp",
-                    ".gif": "image/gif",
-                }
-                mime_type = mime_map.get(ext, "image/jpeg")
+            content_type = response.headers.get("content-type", "").split(";")[0].strip()
+            
+            if not content_type or content_type == "application/octet-stream":
+                # 从 URL 路径推断
+                parsed = urlparse(url)
+                path = parsed.path.lower()
+                mime_type, _ = mimetypes.guess_type(path)
+                content_type = mime_type or "image/jpeg"
             
             # 确保是支持的格式
             supported_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
-            if mime_type not in supported_types:
-                mime_type = "image/jpeg"
+            if content_type not in supported_types:
+                content_type = "image/jpeg"
             
             # 编码为 base64
             base64_data = base64.b64encode(image_data).decode("utf-8")
             
-            return f"data:{mime_type};base64,{base64_data}"
+            logger.debug(f"图片转换成功: {url[:50]}... -> {content_type}, {len(base64_data)} bytes")
+            
+            return f"data:{content_type};base64,{base64_data}"
             
         except Exception as e:
-            logger.error(f"读取本地图片失败 {path}: {e}")
+            logger.error(f"下载图片失败 {url}: {e}")
             return None
     
     def _url_to_base64_data_url(self, url: str) -> Optional[str]:

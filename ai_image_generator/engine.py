@@ -52,23 +52,26 @@ class RateLimiter:
     
     def acquire(self):
         """获取请求许可，如果超过限制则等待"""
-        with self._lock:
-            now = time.time()
-            # 清理过期的请求记录
-            self.requests = [t for t in self.requests if now - t < self.time_window]
+        while True:
+            wait_time = 0
+            with self._lock:
+                now = time.time()
+                # 清理过期的请求记录
+                self.requests = [t for t in self.requests if now - t < self.time_window]
+                
+                if len(self.requests) < self.max_requests:
+                    # 有配额，记录并返回
+                    self.requests.append(now)
+                    return
+                else:
+                    # 需要等待，计算等待时间
+                    oldest = self.requests[0]
+                    wait_time = self.time_window - (now - oldest) + 0.1
             
-            if len(self.requests) >= self.max_requests:
-                # 需要等待，计算等待时间
-                oldest = self.requests[0]
-                wait_time = self.time_window - (now - oldest) + 0.1
-                if wait_time > 0:
-                    logger.debug(f"速率限制，等待 {wait_time:.1f}秒")
-                    time.sleep(wait_time)
-                    # 重新清理
-                    now = time.time()
-                    self.requests = [t for t in self.requests if now - t < self.time_window]
-            
-            self.requests.append(time.time())
+            # 在锁外面等待，让其他线程也能检查
+            if wait_time > 0:
+                logger.debug(f"速率限制，等待 {wait_time:.1f}秒")
+                time.sleep(wait_time)
 
 
 class GenerationEngine:
@@ -105,8 +108,8 @@ class GenerationEngine:
         self._uploaded_moss_ids: Dict[str, str] = {}  # 路径 -> moss_id映射
         self._upload_lock = threading.Lock()  # 上传缓存锁
         
-        # 速率限制器：10秒20个请求（仅 KieAI 需要）
-        self._rate_limiter = RateLimiter(max_requests=20, time_window=10.0)
+        # 速率限制器：10秒8个请求（仅 KieAI 需要）
+        self._rate_limiter = RateLimiter(max_requests=8, time_window=10.0)
         self._use_rate_limiter = True  # 是否启用速率限制
         
         # 生成日志锁
@@ -400,8 +403,8 @@ class GenerationEngine:
         # 检查资源数量是否足够
         warnings = []
         
-        # 检查 Prompt 数量
-        if prompts and len(prompts) < template_cfg.group_count:
+        # 检查 Prompt 数量（仅场景生成模式需要多个 prompt，主体迁移模式所有组共用一个）
+        if prompts and template_cfg.mode == "scene_generation" and len(prompts) < template_cfg.group_count:
             warnings.append(
                 f"Prompt数量不足: 需要 {template_cfg.group_count} 个，但只有 {len(prompts)} 个可用，超出的组将随机复用"
             )
@@ -549,9 +552,15 @@ class GenerationEngine:
         if specified_product_images:
             logger.info(f"📋 指定图片将覆盖前 {coverage_groups}/{template_cfg.group_count} 组 ({specified_coverage}%)")
         
-        # 获取最大并发组数
+        # 获取最大并发组数 - 根据服务类型自动调整
         max_concurrent_groups = template_cfg.output.max_concurrent_groups
-        logger.info(f"🚀 最大并发组数: {max_concurrent_groups}")
+        
+        # KieAI 有速率限制，强制限制并发组数
+        if self._global_config.image_service == "kieai":
+            max_concurrent_groups = min(max_concurrent_groups, 4)
+            logger.info(f"🚀 最大并发组数: {max_concurrent_groups} (KieAI 限制)")
+        else:
+            logger.info(f"🚀 最大并发组数: {max_concurrent_groups}")
         
         # 收集待执行的组
         pending_groups = []
@@ -811,9 +820,6 @@ class GenerationEngine:
         all_selected_products = []
         all_selected_references = []
         
-        # 判断是否使用 OpenRouter（跳过 MOSS 上传）
-        use_openrouter = self._global_config.image_service == "openrouter"
-        
         for image_index, (prod_img, ref_img) in enumerate(group_tasks):
             image_num = image_index + 1
             
@@ -821,21 +827,14 @@ class GenerationEngine:
             if ref_img:
                 all_selected_references.append(ref_img)
             
-            # 收集本地图片路径
-            local_image_paths = [prod_img]
+            # 上传图片
+            images_to_upload = [prod_img]
             if ref_img:
-                local_image_paths.append(ref_img)
+                images_to_upload.append(ref_img)
+            image_urls = self._upload_images(images_to_upload)
             
-            # OpenRouter 直接使用本地路径，KieAI 需要上传到 MOSS
-            if use_openrouter:
-                # OpenRouter: 跳过上传，直接使用本地路径
-                image_urls = []  # 不需要 URL
-            else:
-                # KieAI: 上传图片到 MOSS
-                image_urls = self._upload_images(local_image_paths)
-                # 刷新URL
-                fresh_urls = self._refresh_urls(local_image_paths)
-                image_urls = fresh_urls if fresh_urls else image_urls
+            # 刷新URL
+            fresh_urls = self._refresh_urls(images_to_upload)
             
             # 构建模板上下文
             context = self.template_engine.build_context(
@@ -863,8 +862,7 @@ class GenerationEngine:
                 "image_num": image_num,
                 "prompt": rendered_prompt,
                 "output_path": output_path,
-                "image_urls": image_urls,
-                "local_image_paths": local_image_paths,  # 新增：本地路径
+                "image_urls": fresh_urls,
                 "product_image": prod_img,
                 "reference_image": ref_img,
             })
@@ -977,66 +975,92 @@ class GenerationEngine:
         images_count = len(tasks)
         log_prefix = f"[组{group_num}]"
         
+        # 重试配置
+        max_retries = 6  # 最大重试次数
+        retry_delay_base = 5  # 基础重试延迟（秒）
+        
         def generate_single(task: Dict) -> Tuple[int, ImageResult]:
-            """生成单张图片"""
+            """生成单张图片（带重试）"""
             image_index = task["image_index"]
             image_num = task["image_num"]
             prompt = task["prompt"]
             output_path = task["output_path"]
             image_urls = task["image_urls"]
-            local_image_paths = task.get("local_image_paths", [])
             task_log_prefix = f"{log_prefix}[{image_num}/{images_count}]"
             
-            # 速率限制（仅 KieAI 需要）
-            if self._use_rate_limiter:
-                self._rate_limiter.acquire()
+            last_error = None
             
-            logger.info(f"{task_log_prefix} 🎨 开始生成...")
+            for attempt in range(max_retries + 1):
+                # 速率限制（仅 KieAI 需要）
+                if self._use_rate_limiter:
+                    self._rate_limiter.acquire()
+                
+                if attempt == 0:
+                    logger.info(f"{task_log_prefix} 🎨 开始生成...")
+                else:
+                    logger.info(f"{task_log_prefix} 🔄 重试 {attempt}/{max_retries}...")
+                
+                try:
+                    result = self.api_client.generate_image(
+                        prompt=prompt,
+                        image_urls=image_urls,
+                        output_path=output_path,
+                        aspect_ratio=aspect_ratio,
+                        resolution=resolution,
+                        output_format=output_format,
+                        log_prefix=task_log_prefix,
+                    )
+                    
+                    logger.info(f"{task_log_prefix} ✅ 完成")
+                    
+                    return image_index, ImageResult(
+                        index=image_index,
+                        output_path=output_path,
+                        task_id=result.task_id,
+                        prompt=prompt,
+                        input_images=image_urls,
+                        success=True,
+                    )
+                    
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    # 判断是否可重试的错误
+                    is_retryable = (
+                        "429" in error_str or  # 速率限制
+                        "too high" in error_str.lower() or  # 频率过高
+                        "timeout" in error_str.lower() or  # 超时
+                        "timed out" in error_str.lower() or
+                        "500" in error_str or  # 服务器内部错误
+                        "502" in error_str or  # 网关错误
+                        "503" in error_str or  # 服务不可用
+                        "520" in error_str or  # Cloudflare 错误
+                        "522" in error_str or  # Cloudflare 连接超时
+                        "524" in error_str or  # Cloudflare 超时
+                        "fail" in error_str.lower()  # KieAI 任务失败
+                    )
+                    
+                    if is_retryable and attempt < max_retries:
+                        # 指数退避延迟
+                        delay = retry_delay_base * (2 ** attempt)
+                        logger.warning(f"{task_log_prefix} ⚠️ 失败: {e}，{delay}秒后重试...")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.error(f"{task_log_prefix} ❌ 失败: {e}")
+                        break
             
-            try:
-                # 构建调用参数
-                generate_kwargs = {
-                    "prompt": prompt,
-                    "image_urls": image_urls,
-                    "output_path": output_path,
-                    "aspect_ratio": aspect_ratio,
-                    "resolution": resolution,
-                    "output_format": output_format,
-                    "log_prefix": task_log_prefix,
-                }
-                
-                # OpenRouter 支持本地路径参数
-                if local_image_paths and hasattr(self.api_client, 'generate_image'):
-                    # 检查是否是 OpenRouterImageClient（支持 local_image_paths）
-                    import inspect
-                    sig = inspect.signature(self.api_client.generate_image)
-                    if 'local_image_paths' in sig.parameters:
-                        generate_kwargs["local_image_paths"] = local_image_paths
-                
-                result = self.api_client.generate_image(**generate_kwargs)
-                
-                logger.info(f"{task_log_prefix} ✅ 完成")
-                
-                return image_index, ImageResult(
-                    index=image_index,
-                    output_path=output_path,
-                    task_id=result.task_id,
-                    prompt=prompt,
-                    input_images=image_urls,
-                    success=True,
-                )
-                
-            except Exception as e:
-                logger.error(f"{task_log_prefix} ❌ 失败: {e}")
-                return image_index, ImageResult(
-                    index=image_index,
-                    output_path=output_path,
-                    task_id="",
-                    prompt=prompt,
-                    input_images=image_urls,
-                    success=False,
-                    error=str(e),
-                )
+            # 所有重试都失败
+            return image_index, ImageResult(
+                index=image_index,
+                output_path=output_path,
+                task_id="",
+                prompt=prompt,
+                input_images=image_urls,
+                success=False,
+                error=str(last_error),
+            )
         
         # 使用线程池并发执行
         # KieAI 限制组内最多5个并发，OpenRouter 不限制

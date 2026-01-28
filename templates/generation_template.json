@@ -2,7 +2,7 @@
   "name": "敏卓美妆",
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
-  "group_count": 3,
+  "group_count": 10,
   "images_per_group": [
     3,
     5
@@ -19,12 +19,12 @@
     "specified_images": []
   },
   "scene_prompts": {
-    "source_dir": "Prompt/图片生成/场景生成",
+    "source_dir": "prompts/scene_generation.json",
     "specified_prompts": [],
     "custom_template": null
   },
   "transfer_prompts": {
-    "source_dir": "Prompt/图片生成/主体迁移",
+    "source_dir": "prompts/subject_transfer.json",
     "specified_prompt": "background_to_product",
     "custom_template": null
   },
@@ -38,8 +38,6 @@
   },
   "text_generation": {
     "enabled": true,
-    "title_prompts_dir": "Prompt/文案生成/标题",
-    "content_prompts_dir": "Prompt/文案生成/文案",
     "max_few_shot_examples": 5,
     "tags": [
       "敏卓美妆",
