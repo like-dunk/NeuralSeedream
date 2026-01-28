@@ -12,8 +12,10 @@ from .models import (
     GlobalConfig,
     ImageSelectionConfig,
     OutputConfig,
-    PromptConfig,
+    ScenePromptConfig,
+    TransferPromptConfig,
     TemplateConfig,
+    TextGenerationConfig,
 )
 
 
@@ -79,22 +81,71 @@ class ConfigManager:
         # 从环境变量或配置文件获取值
         kieai_cfg = data.get("kieai", {})
         moss_cfg = data.get("moss", {})
+        openrouter_cfg = data.get("openrouter", {})
+        openrouter_image_cfg = data.get("openrouter_image", {})
         
-        api_key = os.getenv("KIEAI_API_KEY") or kieai_cfg.get("api_key")
-        if not api_key:
-            raise ConfigurationError("缺少API密钥", field="api_key")
+        # 图片生成服务选择（默认 kieai）
+        image_service = data.get("image_service", "kieai")
+        
+        # KieAI 配置
+        kieai_api_key = os.getenv("KIEAI_API_KEY") or kieai_cfg.get("api_key", "")
+        
+        # OpenRouter 图片生成配置（可以复用 openrouter 配置或使用独立配置）
+        openrouter_image_api_key = (
+            os.getenv("OPENROUTER_IMAGE_API_KEY") or 
+            openrouter_image_cfg.get("api_key") or 
+            os.getenv("OPENROUTER_API_KEY") or 
+            openrouter_cfg.get("api_key", "")
+        )
+        openrouter_image_model = (
+            openrouter_image_cfg.get("model") or 
+            "google/gemini-2.5-flash-preview-05-20"
+        )
+        
+        # 验证：根据选择的服务检查必需的配置
+        if image_service == "kieai" and not kieai_api_key:
+            raise ConfigurationError("使用 KieAI 服务需要配置 kieai.api_key", field="kieai.api_key")
+        if image_service == "openrouter" and not openrouter_image_api_key:
+            raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.api_key", field="openrouter.api_key")
         
         self._global_config = GlobalConfig(
-            api_key=api_key,
+            # 服务选择
+            image_service=image_service,
+            # KieAI 配置
+            api_key=kieai_api_key,
             api_base_url=kieai_cfg.get("base_url", "https://api.kie.ai/api/v1"),
             model=kieai_cfg.get("model", "nano-banana-pro"),
+            poll_interval=float(kieai_cfg.get("poll_interval", 2.0)),
+            max_wait=float(kieai_cfg.get("max_wait_seconds", 1500.0)),
+            # MOSS 配置
             moss_base_url=os.getenv("MOSS_BASE_URL") or moss_cfg.get("base_url", ""),
             moss_access_key_id=os.getenv("MOSS_ACCESS_KEY_ID") or moss_cfg.get("access_key_id", ""),
             moss_access_key_secret=os.getenv("MOSS_ACCESS_KEY_SECRET") or moss_cfg.get("access_key_secret", ""),
             moss_bucket_name=os.getenv("MOSS_BUCKET_NAME") or moss_cfg.get("bucket_name", ""),
-            poll_interval=float(kieai_cfg.get("poll_interval", 2.0)),
-            max_wait=float(kieai_cfg.get("max_wait_seconds", 1500.0)),
             moss_expire_seconds=int(moss_cfg.get("expire_seconds", 86400)),
+            # OpenRouter 图片生成配置
+            openrouter_image_api_key=openrouter_image_api_key,
+            openrouter_image_base_url=(
+                openrouter_image_cfg.get("base_url") or 
+                openrouter_cfg.get("base_url", "https://openrouter.ai/api/v1")
+            ),
+            openrouter_image_model=openrouter_image_model,
+            openrouter_image_site_url=(
+                openrouter_image_cfg.get("site_url") or 
+                os.getenv("OPENROUTER_SITE_URL") or 
+                openrouter_cfg.get("site_url", "")
+            ),
+            openrouter_image_site_name=(
+                openrouter_image_cfg.get("site_name") or 
+                os.getenv("OPENROUTER_SITE_NAME") or 
+                openrouter_cfg.get("site_name", "")
+            ),
+            # OpenRouter 文案生成配置（保持原有）
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or openrouter_cfg.get("api_key", ""),
+            openrouter_base_url=os.getenv("OPENROUTER_BASE_URL") or openrouter_cfg.get("base_url", "https://openrouter.ai/api/v1"),
+            openrouter_model=openrouter_cfg.get("model", "google/gemini-3-flash-preview"),
+            openrouter_site_url=os.getenv("OPENROUTER_SITE_URL") or openrouter_cfg.get("site_url", ""),
+            openrouter_site_name=os.getenv("OPENROUTER_SITE_NAME") or openrouter_cfg.get("site_name", ""),
         )
         
         return self._global_config
@@ -110,7 +161,7 @@ class ConfigManager:
         data = self._load_json(self.template_path)
         
         # 验证必需字段
-        required_fields = ["name", "mode", "group_count", "product_images", "prompts"]
+        required_fields = ["name", "mode", "group_count", "product_images"]
         for field in required_fields:
             if field not in data:
                 raise ConfigurationError(f"模板配置缺少必需字段: {field}", field=field)
@@ -139,25 +190,32 @@ class ConfigManager:
                 specified_coverage=ref_cfg.get("specified_coverage", 100),
             )
         
-        # 解析Prompt配置
-        prompt_cfg = data["prompts"]
+        # 解析Prompt配置（新版）
         mode = data["mode"]
+        scene_prompts = None
+        transfer_prompts = None
         
-        # 根据模式选择对应的 source_dir
-        source_dir = prompt_cfg.get("source_dir")
-        if not source_dir:
-            if mode == "scene_generation":
-                source_dir = prompt_cfg.get("source_dir_scene")
-            else:  # subject_transfer
-                source_dir = prompt_cfg.get("source_dir_transfer")
+        if "scene_prompts" in data:
+            sp_cfg = data["scene_prompts"]
+            scene_prompts = ScenePromptConfig(
+                source_dir=sp_cfg.get("source_dir", "Prompt/图片生成/场景生成"),
+                specified_prompts=sp_cfg.get("specified_prompts", []),
+                custom_template=sp_cfg.get("custom_template"),
+            )
         
-        prompts = PromptConfig(
-            source_dir=source_dir,
-            selection_mode=prompt_cfg.get("selection_mode", "random"),
-            unique_per_group=prompt_cfg.get("unique_per_group", True),
-            specified_prompts=prompt_cfg.get("specified_prompts", []),
-            custom_template=prompt_cfg.get("custom_template"),
-        )
+        if "transfer_prompts" in data:
+            tp_cfg = data["transfer_prompts"]
+            transfer_prompts = TransferPromptConfig(
+                source_dir=tp_cfg.get("source_dir", "Prompt/图片生成/主体迁移"),
+                specified_prompt=tp_cfg.get("specified_prompt"),
+                custom_template=tp_cfg.get("custom_template"),
+            )
+        
+        # 验证：根据模式检查必需的 prompt 配置
+        if mode == "scene_generation" and not scene_prompts:
+            raise ConfigurationError("场景生成模式需要配置 scene_prompts", field="scene_prompts")
+        if mode == "subject_transfer" and not transfer_prompts:
+            raise ConfigurationError("主体迁移模式需要配置 transfer_prompts", field="transfer_prompts")
         
         # 解析输出配置
         output_cfg = data.get("output", {})
@@ -167,6 +225,17 @@ class ConfigManager:
             resolution=output_cfg.get("resolution", "2K"),
             format=output_cfg.get("format", "png"),
             max_concurrent_groups=output_cfg.get("max_concurrent_groups", 3),
+            generate_text=output_cfg.get("generate_text", True),
+        )
+        
+        # 解析文案生成配置
+        text_gen_cfg = data.get("text_generation", {})
+        text_generation = TextGenerationConfig(
+            enabled=text_gen_cfg.get("enabled", True),
+            title_prompts_dir=text_gen_cfg.get("title_prompts_dir", "Prompt/文案生成/标题"),
+            content_prompts_dir=text_gen_cfg.get("content_prompts_dir", "Prompt/文案生成/文案"),
+            max_few_shot_examples=text_gen_cfg.get("max_few_shot_examples", 5),
+            tags=text_gen_cfg.get("tags", []),
         )
         
         self._template_config = TemplateConfig(
@@ -177,10 +246,12 @@ class ConfigManager:
             images_per_group=data.get("images_per_group", 1),
             product_images=product_images,
             reference_images=reference_images,
-            prompts=prompts,
             output=output,
             template_variables=data.get("template_variables", {}),
             paths=data.get("paths", {}),
+            text_generation=text_generation,
+            scene_prompts=scene_prompts,
+            transfer_prompts=transfer_prompts,
         )
         
         return self._template_config
@@ -222,10 +293,15 @@ class ConfigManager:
                         errors.append(f"参考图目录不存在: {ref_dir}")
             
             # 验证Prompt目录
-            if template_cfg.prompts.source_dir:
-                prompt_dir = self.get_resolved_path("prompts", template_cfg.prompts.source_dir)
+            if template_cfg.mode == "scene_generation" and template_cfg.scene_prompts:
+                prompt_dir = self.get_resolved_path("scene_prompts", template_cfg.scene_prompts.source_dir)
                 if not prompt_dir.exists():
-                    errors.append(f"Prompt目录不存在: {prompt_dir}")
+                    errors.append(f"场景生成Prompt目录不存在: {prompt_dir}")
+            
+            if template_cfg.mode == "subject_transfer" and template_cfg.transfer_prompts:
+                prompt_dir = self.get_resolved_path("transfer_prompts", template_cfg.transfer_prompts.source_dir)
+                if not prompt_dir.exists():
+                    errors.append(f"主体迁移Prompt目录不存在: {prompt_dir}")
         
         except Exception as e:
             errors.append(f"模板配置错误: {e}")
@@ -260,7 +336,10 @@ class ConfigManager:
                 "reference_images", template_cfg.reference_images.source_dir
             )
         
-        if template_cfg.prompts.source_dir:
-            paths["prompts"] = self.get_resolved_path("prompts", template_cfg.prompts.source_dir)
+        # 根据模式获取 prompt 目录
+        if template_cfg.mode == "scene_generation" and template_cfg.scene_prompts:
+            paths["prompts"] = self.get_resolved_path("scene_prompts", template_cfg.scene_prompts.source_dir)
+        elif template_cfg.mode == "subject_transfer" and template_cfg.transfer_prompts:
+            paths["prompts"] = self.get_resolved_path("transfer_prompts", template_cfg.transfer_prompts.source_dir)
         
         return paths

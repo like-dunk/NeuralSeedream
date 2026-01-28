@@ -12,15 +12,13 @@
   },
 
   "reference_images": {
-    "source_dir": "参考图/化妆品家用场景",
+    "source_dir": "参考图/小红书家用场景参考图",
     "specified_images": []
   },
 
-  "prompts": {
+  "transfer_prompts": {
     "source_dir": "Prompt/图片生成/主体迁移",
-    "selection_mode": "random",
-    "unique_per_group": true,
-    "specified_prompts": [],
+    "specified_prompt": null,
     "custom_template": null
   },
 

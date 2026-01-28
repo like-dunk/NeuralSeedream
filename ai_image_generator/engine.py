@@ -22,11 +22,13 @@ from .models import (
     ImageResult,
     RunResult,
     TemplateContext,
+    TextResult,
 )
 from .moss_uploader import MOSSUploader
 from .output_manager import OutputManager
 from .state_manager import StateManager
 from .template_engine import TemplateEngine
+from .text_generator import TextGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,7 @@ class GenerationEngine:
         api_client: APIClient,
         output_manager: OutputManager,
         state_manager: StateManager,
+        text_generator: Optional[TextGenerator] = None,
     ):
         """初始化生成引擎"""
         self.config_manager = config_manager
@@ -89,6 +92,7 @@ class GenerationEngine:
         self.api_client = api_client
         self.output_manager = output_manager
         self.state_manager = state_manager
+        self.text_generator = text_generator
         
         # 缓存配置
         self._template_config = None
@@ -100,8 +104,9 @@ class GenerationEngine:
         self._uploaded_moss_ids: Dict[str, str] = {}  # 路径 -> moss_id映射
         self._upload_lock = threading.Lock()  # 上传缓存锁
         
-        # 速率限制器：10秒20个请求
+        # 速率限制器：10秒20个请求（仅 KieAI 需要）
         self._rate_limiter = RateLimiter(max_requests=20, time_window=10.0)
+        self._use_rate_limiter = True  # 是否启用速率限制
         
         # 生成日志锁
         self._log_lock = threading.Lock()
@@ -110,6 +115,10 @@ class GenerationEngine:
         """加载配置"""
         self._global_config = self.config_manager.load_global_config()
         self._template_config = self.config_manager.load_template_config()
+        
+        # OpenRouter 不需要速率限制
+        if self._global_config.image_service == "openrouter":
+            self._use_rate_limiter = False
     
     def _get_moss_folder(self) -> str:
         """获取MOSS上传文件夹路径"""
@@ -171,6 +180,162 @@ class GenerationEngine:
     def _upload_images_no_cache(self, paths: List[Path]) -> List[str]:
         """上传图片（不使用缓存，用于刷新）"""
         return self._upload_images(paths)
+
+    def _allocate_prompts_for_groups(
+        self,
+        prompts: List[Path],
+        group_count: int,
+        mode: str,
+    ) -> List[Path]:
+        """
+        根据模式为所有组分配 Prompt
+        
+        场景生成模式：
+        - 每组使用不同的 prompt（不重复随机）
+        - 指定的 prompts 优先使用，剩余组继续随机
+        - prompt 用完后才会复用
+        
+        主体迁移模式：
+        - 所有组共用同一个 prompt
+        - 默认随机选择一个，也可以指定
+        
+        Args:
+            prompts: 可用的 prompt 文件列表
+            group_count: 组数
+            mode: 生成模式
+            
+        Returns:
+            每组对应的 prompt 路径列表
+        """
+        template_cfg = self._template_config
+        
+        if mode == "scene_generation":
+            return self._allocate_scene_prompts(prompts, group_count)
+        else:  # subject_transfer
+            return self._allocate_transfer_prompts(prompts, group_count)
+    
+    def _allocate_scene_prompts(self, prompts: List[Path], group_count: int) -> List[Path]:
+        """
+        场景生成模式的 prompt 分配
+        
+        规则：
+        1. 指定的 prompts 优先分配给前面的组
+        2. 剩余组从未使用的 prompts 中随机选择（不重复）
+        3. 如果 prompts 用完，则从头开始复用（但确保相邻组不同）
+        """
+        template_cfg = self._template_config
+        result = []
+        used_prompts = set()
+        
+        # 获取指定的 prompts
+        specified = []
+        if template_cfg.scene_prompts and template_cfg.scene_prompts.specified_prompts:
+            for spec in template_cfg.scene_prompts.specified_prompts:
+                found = self.image_selector.find_image_by_path(prompts, spec)
+                if found:
+                    specified.append(found)
+                else:
+                    logger.warning(f"⚠️ 指定的 prompt 未找到: {spec}")
+        
+        # 分配 prompts
+        for i in range(group_count):
+            previous = result[-1] if result else None
+            
+            if i < len(specified):
+                # 使用指定的 prompt
+                selected = specified[i]
+            else:
+                # 随机选择未使用的 prompt
+                selected = self.image_selector.select_unique_prompt(
+                    prompts=prompts,
+                    used_prompts=used_prompts,
+                    previous_prompt=str(previous) if previous else None,
+                )
+            
+            if selected:
+                result.append(selected)
+                used_prompts.add(str(selected))
+            elif prompts:
+                # 所有 prompts 都用过了，复用但确保与上一组不同
+                available = [p for p in prompts if str(p) != str(previous)] if previous else prompts
+                result.append(random.choice(available) if available else prompts[0])
+            else:
+                result.append(None)
+        
+        return result
+    
+    def _allocate_transfer_prompts(self, prompts: List[Path], group_count: int) -> List[Path]:
+        """
+        主体迁移模式的 prompt 分配
+        
+        规则：
+        1. 如果指定了 prompt，所有组都使用该 prompt
+        2. 否则随机选择一个，所有组共用
+        """
+        template_cfg = self._template_config
+        
+        selected = None
+        
+        # 检查是否指定了 prompt
+        if template_cfg.transfer_prompts and template_cfg.transfer_prompts.specified_prompt:
+            spec = template_cfg.transfer_prompts.specified_prompt
+            selected = self.image_selector.find_image_by_path(prompts, spec)
+            if not selected:
+                logger.warning(f"⚠️ 指定的 prompt 未找到: {spec}，将随机选择")
+        
+        # 如果没有指定或未找到，随机选择一个
+        if not selected and prompts:
+            selected = random.choice(prompts)
+        
+        if selected:
+            logger.info(f"📝 主体迁移模式：所有组使用 prompt: {selected.name}")
+        
+        # 所有组使用同一个 prompt
+        return [selected] * group_count
+    
+    def _get_custom_template(self) -> Optional[str]:
+        """获取自定义模板内容"""
+        template_cfg = self._template_config
+        
+        if template_cfg.mode == "scene_generation" and template_cfg.scene_prompts:
+            return template_cfg.scene_prompts.custom_template
+        elif template_cfg.mode == "subject_transfer" and template_cfg.transfer_prompts:
+            return template_cfg.transfer_prompts.custom_template
+        
+        return None
+    
+    def _remove_ai_tags(self, content: str) -> str:
+        """
+        移除 AI 生成的标签
+        
+        AI 生成的文案末尾通常会有 #标签1 #标签2 这样的格式，
+        我们需要移除它们，使用用户配置的标签代替。
+        
+        Args:
+            content: 原始文案内容
+            
+        Returns:
+            移除标签后的文案
+        """
+        import re
+        
+        # 匹配末尾的标签行（一行或多行以 # 开头的标签）
+        # 例如: #海洋至尊 #护肤分享 #补水保湿
+        lines = content.rstrip().split('\n')
+        
+        # 从末尾开始检查，移除纯标签行
+        while lines:
+            last_line = lines[-1].strip()
+            # 检查是否是标签行（以 # 开头，且主要由 #xxx 组成）
+            if last_line and last_line.startswith('#'):
+                # 检查这一行是否主要是标签
+                tags_pattern = r'^[#\w\u4e00-\u9fff\s]+$'
+                if re.match(tags_pattern, last_line):
+                    lines.pop()
+                    continue
+            break
+        
+        return '\n'.join(lines)
 
     def run(self, dry_run: bool = False, auto_confirm: bool = False) -> RunResult:
         """
@@ -295,11 +460,11 @@ class GenerationEngine:
             run_dir=run_dir,
         )
         
-        # 预分配Prompt（每组一个，不重复选择）
-        self._prompt_assignments = self.image_selector.select_prompts_for_groups(
+        # 预分配Prompt（根据模式使用不同策略）
+        self._prompt_assignments = self._allocate_prompts_for_groups(
             prompts=prompts,
             group_count=template_cfg.group_count,
-            unique_per_group=template_cfg.prompts.unique_per_group,
+            mode=template_cfg.mode,
         )
         
         # 验证指定图片
@@ -596,8 +761,11 @@ class GenerationEngine:
         prompt_template = ""
         if prompt_path:
             prompt_template = self.template_engine.load_template(prompt_path)
-        elif template_cfg.prompts.custom_template:
-            prompt_template = template_cfg.prompts.custom_template
+        else:
+            # 检查自定义模板
+            custom_template = self._get_custom_template()
+            if custom_template:
+                prompt_template = custom_template
         
         # 创建组目录
         group_dir = self.output_manager.create_group_directory(group_num)
@@ -666,6 +834,55 @@ class GenerationEngine:
             output_format=template_cfg.output.format,
         )
         
+        # 生成文案（如果启用）
+        text_result = None
+        if self.text_generator and self.text_generator.is_enabled():
+            text_gen_cfg = template_cfg.text_generation
+            if text_gen_cfg and text_gen_cfg.enabled:
+                logger.info(f"{log_prefix} 📝 开始生成文案...")
+                try:
+                    product_info = {
+                        "product_name": template_cfg.template_variables.get("product_name", template_cfg.name),
+                        "brand": template_cfg.template_variables.get("brand", ""),
+                        "style": template_cfg.template_variables.get("style", "种草分享"),
+                        "features": template_cfg.template_variables.get("features", ""),
+                        "target_audience": template_cfg.template_variables.get("target_audience", "年轻女性"),
+                    }
+                    
+                    text_data = self.text_generator.generate_sync(product_info)
+                    
+                    # 移除 AI 生成的标签（如果有）
+                    content = text_data["content"]
+                    # 移除文案末尾的 # 标签
+                    content = self._remove_ai_tags(content)
+                    
+                    text_result = TextResult(
+                        title=text_data["title"],
+                        content=content,
+                        success=True,
+                    )
+                    logger.info(f"{log_prefix} 📝 文案生成成功: {text_data['title'][:30]}...")
+                    
+                    # 保存文案到文件
+                    text_file = group_dir / "text.txt"
+                    with open(text_file, "w", encoding="utf-8") as f:
+                        f.write(f"标题：{text_data['title']}\n\n")
+                        f.write(f"文案：\n{content}\n")
+                        
+                        # 添加用户配置的标签
+                        if text_gen_cfg.tags:
+                            tags_str = " ".join([f"#{tag}" for tag in text_gen_cfg.tags])
+                            f.write(f"\n{tags_str}\n")
+                    
+                except Exception as e:
+                    logger.error(f"{log_prefix} 📝 文案生成失败: {e}")
+                    text_result = TextResult(
+                        title="",
+                        content="",
+                        success=False,
+                        error=str(e),
+                    )
+        
         # 创建组结果
         group_result = GroupResult(
             group_index=group_index,
@@ -676,6 +893,7 @@ class GenerationEngine:
             prompt_rendered=tasks[0]["prompt"] if tasks else "",
             images=image_results,
             completed_at=datetime.now(),
+            text_result=text_result,
         )
         
         # 保存组结果
@@ -722,8 +940,9 @@ class GenerationEngine:
             image_urls = task["image_urls"]
             task_log_prefix = f"{log_prefix}[{image_num}/{images_count}]"
             
-            # 速率限制
-            self._rate_limiter.acquire()
+            # 速率限制（仅 KieAI 需要）
+            if self._use_rate_limiter:
+                self._rate_limiter.acquire()
             
             logger.info(f"{task_log_prefix} 🎨 开始生成...")
             
@@ -762,7 +981,11 @@ class GenerationEngine:
                 )
         
         # 使用线程池并发执行
-        max_workers = min(len(tasks), 5)  # 组内最多5个并发
+        # KieAI 限制组内最多5个并发，OpenRouter 不限制
+        if self._use_rate_limiter:
+            max_workers = min(len(tasks), 5)
+        else:
+            max_workers = len(tasks)  # OpenRouter 全并发
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(generate_single, task): task for task in tasks}

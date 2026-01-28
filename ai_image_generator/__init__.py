@@ -11,15 +11,19 @@ __version__ = "1.0.0"
 from .models import (
     GenerationMode,
     SelectionMode,
+    ImageServiceProvider,
     GlobalConfig,
     TemplateConfig,
     ImageSelectionConfig,
-    PromptConfig,
+    ScenePromptConfig,
+    TransferPromptConfig,
     OutputConfig,
+    TextGenerationConfig,
     TemplateContext,
     UploadResult,
     TaskResult,
     ImageResult,
+    TextResult,
     GroupResult,
     RunState,
     RunResult,
@@ -38,24 +42,30 @@ from .template_engine import TemplateEngine
 from .image_selector import ImageSelector
 from .moss_uploader import MOSSUploader
 from .api_client import APIClient
+from .openrouter_image_client import OpenRouterImageClient
 from .output_manager import OutputManager
 from .state_manager import StateManager
+from .text_generator import TextGenerator
 from .engine import GenerationEngine
 
 __all__ = [
     # Enums
     "GenerationMode",
     "SelectionMode",
+    "ImageServiceProvider",
     # Data Models
     "GlobalConfig",
     "TemplateConfig",
     "ImageSelectionConfig",
-    "PromptConfig",
+    "ScenePromptConfig",
+    "TransferPromptConfig",
     "OutputConfig",
+    "TextGenerationConfig",
     "TemplateContext",
     "UploadResult",
     "TaskResult",
     "ImageResult",
+    "TextResult",
     "GroupResult",
     "RunState",
     "RunResult",
@@ -73,7 +83,9 @@ __all__ = [
     "ImageSelector",
     "MOSSUploader",
     "APIClient",
+    "OpenRouterImageClient",
     "OutputManager",
     "StateManager",
+    "TextGenerator",
     "GenerationEngine",
 ]

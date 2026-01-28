@@ -22,19 +22,45 @@ class SelectionMode(Enum):
     SPECIFIED = "specified"
 
 
+class ImageServiceProvider(Enum):
+    """图片生成服务提供商"""
+    KIEAI = "kieai"
+    OPENROUTER = "openrouter"
+
+
 @dataclass
 class GlobalConfig:
     """全局配置"""
-    api_key: str
+    # 图片生成服务选择
+    image_service: str = "kieai"  # kieai 或 openrouter
+    
+    # KieAI 配置
+    api_key: str = ""
     api_base_url: str = "https://api.kie.ai/api/v1"
     model: str = "nano-banana-pro"
+    poll_interval: float = 2.0
+    max_wait: float = 1500.0
+    
+    # MOSS 配置
     moss_base_url: str = ""
     moss_access_key_id: str = ""
     moss_access_key_secret: str = ""
     moss_bucket_name: str = ""
-    poll_interval: float = 2.0
-    max_wait: float = 1500.0
     moss_expire_seconds: int = 86400
+    
+    # OpenRouter 图片生成配置
+    openrouter_image_api_key: str = ""
+    openrouter_image_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_image_model: str = "google/gemini-2.5-flash-preview-05-20"
+    openrouter_image_site_url: str = ""
+    openrouter_image_site_name: str = ""
+    
+    # OpenRouter 文案生成配置（保持原有）
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = ""
+    openrouter_site_url: str = ""
+    openrouter_site_name: str = ""
 
 
 @dataclass
@@ -49,13 +75,33 @@ class ImageSelectionConfig:
 
 
 @dataclass
-class PromptConfig:
-    """Prompt配置"""
-    source_dir: Optional[str] = None
-    selection_mode: str = "random"
-    unique_per_group: bool = True
-    specified_prompts: List[str] = field(default_factory=list)
-    custom_template: Optional[str] = None
+class ScenePromptConfig:
+    """
+    场景生成 Prompt 配置
+    
+    特点：
+    - 每组使用不同的 prompt（不重复随机）
+    - 指定的 prompts 只占用对应数量的组，剩余组继续随机
+    - prompt 用完后才会复用
+    """
+    source_dir: str = "Prompt/图片生成/场景生成"
+    specified_prompts: List[str] = field(default_factory=list)  # 指定的 prompt 文件名列表
+    custom_template: Optional[str] = None  # 自定义模板内容（优先级最高）
+
+
+@dataclass
+class TransferPromptConfig:
+    """
+    主体迁移 Prompt 配置
+    
+    特点：
+    - 所有组共用同一个 prompt
+    - 默认随机选择一个，也可以指定
+    - 指定后所有组都使用该 prompt
+    """
+    source_dir: str = "Prompt/图片生成/主体迁移"
+    specified_prompt: Optional[str] = None  # 指定的单个 prompt 文件名
+    custom_template: Optional[str] = None  # 自定义模板内容（优先级最高）
 
 
 @dataclass
@@ -66,6 +112,17 @@ class OutputConfig:
     resolution: str = "2K"
     format: str = "png"
     max_concurrent_groups: int = 3  # 最大并发组数
+    generate_text: bool = True  # 是否生成文案
+
+
+@dataclass
+class TextGenerationConfig:
+    """文案生成配置"""
+    enabled: bool = True
+    title_prompts_dir: Optional[str] = None  # 标题样本目录
+    content_prompts_dir: Optional[str] = None  # 文案样本目录
+    max_few_shot_examples: int = 5  # 最大 Few-shot 样本数
+    tags: List[str] = field(default_factory=list)  # 用户自定义标签列表
 
 
 @dataclass
@@ -77,11 +134,13 @@ class TemplateConfig:
     group_count: int
     images_per_group: Union[int, List[int]]  # 固定值或 [min, max]
     product_images: ImageSelectionConfig
-    prompts: PromptConfig
     output: OutputConfig
     reference_images: Optional[ImageSelectionConfig] = None
     template_variables: Dict[str, Any] = field(default_factory=dict)
     paths: Dict[str, str] = field(default_factory=dict)
+    text_generation: Optional[TextGenerationConfig] = None  # 文案生成配置
+    scene_prompts: Optional[ScenePromptConfig] = None  # 场景生成模式
+    transfer_prompts: Optional[TransferPromptConfig] = None  # 主体迁移模式
 
 
 @dataclass
@@ -143,6 +202,15 @@ class ImageResult:
 
 
 @dataclass
+class TextResult:
+    """文案生成结果"""
+    title: str
+    content: str
+    success: bool
+    error: Optional[str] = None
+
+
+@dataclass
 class GroupResult:
     """组生成结果"""
     group_index: int
@@ -153,10 +221,11 @@ class GroupResult:
     prompt_rendered: str
     images: List[ImageResult]
     completed_at: Optional[datetime] = None
+    text_result: Optional[TextResult] = None  # 文案生成结果
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为可序列化的字典"""
-        return {
+        result = {
             "group_index": self.group_index,
             "group_dir": str(self.group_dir),
             "product_images": [str(p) for p in self.product_images],
@@ -177,6 +246,16 @@ class GroupResult:
             ],
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
+        
+        if self.text_result:
+            result["text"] = {
+                "title": self.text_result.title,
+                "content": self.text_result.content,
+                "success": self.text_result.success,
+                "error": self.text_result.error,
+            }
+        
+        return result
 
 
 @dataclass

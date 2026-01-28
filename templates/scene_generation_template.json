@@ -11,10 +11,8 @@
     "specified_coverage": 100
   },
 
-  "prompts": {
+  "scene_prompts": {
     "source_dir": "Prompt/图片生成/场景生成",
-    "selection_mode": "random",
-    "unique_per_group": true,
     "specified_prompts": [],
     "custom_template": null
   },

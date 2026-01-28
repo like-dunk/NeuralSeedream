@@ -579,12 +579,11 @@ class MossProUtils:
         
         init_data = init_response.json()
         
-        # 检查文件是否已存在
+        # 检查文件是否已存在（MOSS 云端已有相同文件）
         if init_data.get("file_exists"):
-            log.warning("⚠️ 文件已存在")
             if init_data.get("is_active"):
                 existing_moss_id = init_data.get("existing_moss_id")
-                log.info(f"文件已存在且激活 - MOSS ID: {existing_moss_id}")
+                log.debug(f"📦 MOSS 云端已存在相同文件，复用 MOSS ID: {existing_moss_id}")
                 return {
                     "success": False,
                     "file_exists": True,
@@ -592,7 +591,7 @@ class MossProUtils:
                     "message": init_data.get("message", "文件已存在")
                 }
             else:
-                log.info("文件已存在但未激活，已自动重新激活")
+                log.debug("📦 MOSS 云端文件已重新激活")
                 return {
                     "success": True,
                     "file_exists": True,
@@ -1953,7 +1952,7 @@ if __name__ == "__main__":
                 if result.get("success"):
                     log.info(f"✅ 上传成功 - MOSS ID: {result['moss_id']}")
                 else:
-                    log.warning(f"⚠️ 上传失败或文件已存在: {result.get('message')}")
+                    log.debug(f"📦 MOSS 复用已有文件: {result.get('message')}")
             except Exception as e:
                 log.error(f"❌ 上传失败: {e}")
             

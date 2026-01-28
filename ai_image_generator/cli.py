@@ -7,7 +7,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from .api_client import APIClient
 from .config import ConfigManager
@@ -15,9 +15,11 @@ from .engine import GenerationEngine
 from .exceptions import GeneratorError
 from .image_selector import ImageSelector
 from .moss_uploader import MOSSUploader
+from .openrouter_image_client import OpenRouterImageClient
 from .output_manager import OutputManager
 from .state_manager import StateManager
 from .template_engine import TemplateEngine
+from .text_generator import TextGenerator
 
 
 def setup_logging(level: str = "INFO", log_file: Optional[Path] = None):
@@ -66,8 +68,11 @@ def create_engine(
     
     # 模板引擎
     prompts_dir = None
-    if template_config.prompts.source_dir:
-        prompts_dir = config_manager.get_resolved_path("prompts", template_config.prompts.source_dir)
+    # 根据模式获取 prompt 目录
+    if template_config.mode == "scene_generation" and template_config.scene_prompts:
+        prompts_dir = config_manager.get_resolved_path("scene_prompts", template_config.scene_prompts.source_dir)
+    elif template_config.mode == "subject_transfer" and template_config.transfer_prompts:
+        prompts_dir = config_manager.get_resolved_path("transfer_prompts", template_config.transfer_prompts.source_dir)
     template_engine = TemplateEngine(template_dir=prompts_dir)
     
     # 图片选择器
@@ -82,14 +87,28 @@ def create_engine(
         expire_seconds=global_config.moss_expire_seconds,
     )
     
-    # API客户端
-    api_client = APIClient(
-        api_key=global_config.api_key,
-        base_url=global_config.api_base_url,
-        model=global_config.model,
-        poll_interval=global_config.poll_interval,
-        max_wait=global_config.max_wait,
-    )
+    # 根据配置选择图片生成服务
+    image_service = global_config.image_service
+    api_client: Union[APIClient, OpenRouterImageClient]
+    
+    if image_service == "openrouter":
+        logging.info(f"📡 使用 OpenRouter 图片生成服务, model={global_config.openrouter_image_model}")
+        api_client = OpenRouterImageClient(
+            api_key=global_config.openrouter_image_api_key,
+            base_url=global_config.openrouter_image_base_url,
+            model=global_config.openrouter_image_model,
+            site_url=global_config.openrouter_image_site_url,
+            site_name=global_config.openrouter_image_site_name,
+        )
+    else:
+        logging.info(f"📡 使用 KieAI 图片生成服务, model={global_config.model}")
+        api_client = APIClient(
+            api_key=global_config.api_key,
+            base_url=global_config.api_base_url,
+            model=global_config.model,
+            poll_interval=global_config.poll_interval,
+            max_wait=global_config.max_wait,
+        )
     
     # 输出管理器
     output_base = config_manager.get_resolved_path("output_base", template_config.output.base_dir)
@@ -101,6 +120,28 @@ def create_engine(
     # 状态管理器（初始目录为输出目录）
     state_manager = StateManager(state_dir=output_base)
     
+    # 文案生成器（如果配置了 OpenRouter）
+    text_generator = None
+    if global_config.openrouter_api_key:
+        text_generator = TextGenerator(
+            api_key=global_config.openrouter_api_key,
+            base_url=global_config.openrouter_base_url,
+            model=global_config.openrouter_model,
+            site_url=global_config.openrouter_site_url,
+            site_name=global_config.openrouter_site_name,
+        )
+        
+        # 加载 Few-shot 样本
+        text_gen_cfg = template_config.text_generation
+        if text_gen_cfg:
+            title_dir = config_manager.get_resolved_path("title_prompts", text_gen_cfg.title_prompts_dir or "Prompt/文案生成/标题")
+            content_dir = config_manager.get_resolved_path("content_prompts", text_gen_cfg.content_prompts_dir or "Prompt/文案生成/文案")
+            text_generator.load_few_shot_examples(
+                title_dir=title_dir,
+                content_dir=content_dir,
+                max_examples=text_gen_cfg.max_few_shot_examples,
+            )
+    
     # 创建引擎
     return GenerationEngine(
         config_manager=config_manager,
@@ -110,6 +151,7 @@ def create_engine(
         api_client=api_client,
         output_manager=output_manager,
         state_manager=state_manager,
+        text_generator=text_generator,
     )
 
 

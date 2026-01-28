@@ -1,41 +1,59 @@
 {
   "name": "海洋至尊01",
   "description": "AI图片生成配置",
-  "mode": "scene_generation",
+  "mode": "subject_transfer",
   "group_count": 3,
-  "images_per_group": [2, 4],
-
+  "images_per_group": [
+    3,
+    5
+  ],
   "product_images": {
-    "source_dir": "产品图/海洋至尊",
-    "specified_images": [],
+    "source_dir": "产品图/化妆品2",
+    "specified_images": [
+      "/var/www/NanoBanana-MZ/产品图/化妆品2/img_v3_02u6_5bc2d658-4331-456a-b0fe-4dbd5503952g.jpg"
+    ],
     "specified_coverage": 100
   },
-
   "reference_images": {
-    "source_dir": "参考图/化妆品家用场景",
+    "source_dir": "参考图/小红书家用场景参考图",
     "specified_images": []
   },
-
-  "prompts": {
-    "source_dir_scene": "Prompt/图片生成/场景生成",
-    "source_dir_transfer": "Prompt/图片生成/主体迁移",
-    "selection_mode": "random",
-    "unique_per_group": true,
+  "scene_prompts": {
+    "source_dir": "Prompt/图片生成/场景生成",
     "specified_prompts": [],
     "custom_template": null
   },
-
+  "transfer_prompts": {
+    "source_dir": "Prompt/图片生成/主体迁移",
+    "specified_prompt": null,
+    "custom_template": null
+  },
   "output": {
     "base_dir": "./outputs",
     "aspect_ratio": "4:5",
     "resolution": "2K",
     "format": "png",
-    "max_concurrent_groups": 3
+    "max_concurrent_groups": 3,
+    "generate_text": true
   },
-
+  "text_generation": {
+    "enabled": true,
+    "title_prompts_dir": "Prompt/文案生成/标题",
+    "content_prompts_dir": "Prompt/文案生成/文案",
+    "max_few_shot_examples": 5,
+    "tags": [
+      "海洋至尊",
+      "护肤分享",
+      "补水保湿",
+      "温和护肤",
+      "好物推荐"
+    ]
+  },
   "template_variables": {
     "product_name": "海洋至尊护肤套装",
     "brand": "海洋至尊",
-    "style": "清新自然"
+    "style": "清新自然",
+    "target_audience": "年轻女性",
+    "features": "保湿滋润、温和不刺激"
   }
 }
