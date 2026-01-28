@@ -1,5 +1,5 @@
 {
-  "name": "海洋至尊01",
+  "name": "敏卓美妆",
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
   "group_count": 3,
@@ -8,11 +8,11 @@
     5
   ],
   "product_images": {
-    "source_dir": "产品图/化妆品2",
+    "source_dir": "产品图/海洋至尊",
     "specified_images": [
-      "/var/www/NanoBanana-MZ/产品图/化妆品2/img_v3_02u6_5bc2d658-4331-456a-b0fe-4dbd5503952g.jpg"
+      "产品图/海洋至尊/20260122-154506.jpeg"
     ],
-    "specified_coverage": 100
+    "specified_coverage": 50
   },
   "reference_images": {
     "source_dir": "参考图/小红书家用场景参考图",
@@ -25,7 +25,7 @@
   },
   "transfer_prompts": {
     "source_dir": "Prompt/图片生成/主体迁移",
-    "specified_prompt": "product_to_background_v2",
+    "specified_prompt": "background_to_product",
     "custom_template": null
   },
   "output": {
@@ -42,7 +42,7 @@
     "content_prompts_dir": "Prompt/文案生成/文案",
     "max_few_shot_examples": 5,
     "tags": [
-      "海洋至尊",
+      "敏卓美妆",
       "护肤分享",
       "补水保湿",
       "温和护肤",
@@ -50,8 +50,8 @@
     ]
   },
   "template_variables": {
-    "product_name": "海洋至尊护肤套装",
-    "brand": "海洋至尊",
+    "product_name": "敏卓美妆护肤套装",
+    "brand": "敏卓美妆",
     "category": "美妆",
     "style": "清新自然",
     "target_audience": "年轻女性",

@@ -6,10 +6,13 @@ OpenRouter 图片生成客户端 - 使用 OpenAI 兼容接口
 
 import base64
 import logging
+import mimetypes
 import time
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
 
+import httpx
 from openai import OpenAI
 
 from .exceptions import APIError
@@ -71,18 +74,20 @@ class OpenRouterImageClient:
         resolution: str = "2K",
         output_format: str = "png",
         log_prefix: str = "",
+        local_image_paths: Optional[List[Path]] = None,
     ) -> TaskResult:
         """
         生成图片
         
         Args:
             prompt: 生成提示词
-            image_urls: 输入图片 URL 列表（会作为参考图片发送）
+            image_urls: 输入图片 URL 列表（如果提供 local_image_paths 则忽略）
             output_path: 输出路径
             aspect_ratio: 宽高比（会添加到 prompt 中）
             resolution: 分辨率（会添加到 prompt 中）
             output_format: 输出格式
             log_prefix: 日志前缀
+            local_image_paths: 本地图片路径列表（优先使用，跳过 URL 下载）
             
         Returns:
             TaskResult: 任务结果
@@ -91,8 +96,14 @@ class OpenRouterImageClient:
         task_id = f"openrouter_{int(start_time * 1000)}"
         
         try:
-            # 构建消息内容
-            content = self._build_content(prompt, image_urls, aspect_ratio, resolution)
+            # 构建消息内容（优先使用本地路径）
+            content = self._build_content(
+                prompt, 
+                image_urls, 
+                aspect_ratio, 
+                resolution,
+                local_image_paths=local_image_paths,
+            )
             
             logger.debug(f"{log_prefix} 发送请求到 OpenRouter, model={self.model}")
             
@@ -205,27 +216,45 @@ class OpenRouterImageClient:
         image_urls: List[str],
         aspect_ratio: str,
         resolution: str,
+        local_image_paths: Optional[List[Path]] = None,
     ) -> list:
         """
         构建消息内容（支持图片输入）
         
         Args:
             prompt: 提示词
-            image_urls: 输入图片 URL 列表
+            image_urls: 输入图片 URL 列表（如果提供 local_image_paths 则忽略）
             aspect_ratio: 宽高比
             resolution: 分辨率
+            local_image_paths: 本地图片路径列表（优先使用）
             
         Returns:
             消息内容列表
         """
         content = []
         
-        # 添加输入图片（作为参考）
-        for url in image_urls:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": url},
-            })
+        # 优先使用本地图片路径（直接转 base64，跳过网络下载）
+        if local_image_paths:
+            for path in local_image_paths:
+                data_url = self._local_file_to_base64_data_url(path)
+                if data_url:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    })
+                else:
+                    logger.warning(f"无法读取本地图片: {path}")
+        else:
+            # 回退到 URL 方式（需要下载）
+            for url in image_urls:
+                data_url = self._url_to_base64_data_url(url)
+                if data_url:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    })
+                else:
+                    logger.warning(f"无法转换图片 URL: {url}")
         
         # 构建增强的提示词
         enhanced_prompt = prompt
@@ -240,6 +269,95 @@ class OpenRouterImageClient:
         })
         
         return content
+    
+    def _local_file_to_base64_data_url(self, path: Path) -> Optional[str]:
+        """
+        将本地图片文件转换为 base64 data URL
+        
+        Args:
+            path: 本地图片路径
+            
+        Returns:
+            base64 data URL (data:image/jpeg;base64,...) 或 None
+        """
+        try:
+            # 读取文件
+            with open(path, "rb") as f:
+                image_data = f.read()
+            
+            # 确定 MIME 类型
+            mime_type, _ = mimetypes.guess_type(str(path))
+            if not mime_type:
+                # 根据扩展名推断
+                ext = path.suffix.lower()
+                mime_map = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                    ".gif": "image/gif",
+                }
+                mime_type = mime_map.get(ext, "image/jpeg")
+            
+            # 确保是支持的格式
+            supported_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+            if mime_type not in supported_types:
+                mime_type = "image/jpeg"
+            
+            # 编码为 base64
+            base64_data = base64.b64encode(image_data).decode("utf-8")
+            
+            return f"data:{mime_type};base64,{base64_data}"
+            
+        except Exception as e:
+            logger.error(f"读取本地图片失败 {path}: {e}")
+            return None
+    
+    def _url_to_base64_data_url(self, url: str) -> Optional[str]:
+        """
+        将图片 URL 下载并转换为 base64 data URL
+        
+        Google 模型不支持直接访问某些外部 URL（如阿里云 OSS），
+        需要先下载图片再转换为 base64 格式发送。
+        
+        Args:
+            url: 图片 URL
+            
+        Returns:
+            base64 data URL (data:image/jpeg;base64,...) 或 None
+        """
+        try:
+            # 下载图片
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                response = client.get(url)
+                response.raise_for_status()
+            
+            image_data = response.content
+            
+            # 确定 MIME 类型
+            content_type = response.headers.get("content-type", "").split(";")[0].strip()
+            
+            if not content_type or content_type == "application/octet-stream":
+                # 从 URL 路径推断
+                parsed = urlparse(url)
+                path = parsed.path.lower()
+                mime_type, _ = mimetypes.guess_type(path)
+                content_type = mime_type or "image/jpeg"
+            
+            # 确保是支持的格式
+            supported_types = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+            if content_type not in supported_types:
+                # 默认当作 JPEG
+                content_type = "image/jpeg"
+            
+            # 编码为 base64
+            base64_data = base64.b64encode(image_data).decode("utf-8")
+            
+            return f"data:{content_type};base64,{base64_data}"
+            
+        except Exception as e:
+            logger.error(f"下载图片失败 {url}: {e}")
+            return None
     
     def _save_base64_image(self, data_url: str, output_path: Path):
         """

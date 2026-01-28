@@ -181,7 +181,7 @@ class ImageSelector:
             try:
                 prompt = PromptItem(
                     id=item["id"],
-                    name=item["name"],
+                    name=item.get("name") or item["id"],
                     description=item.get("description", ""),
                     enabled=item.get("enabled", True),
                     tags=item.get("tags", []),

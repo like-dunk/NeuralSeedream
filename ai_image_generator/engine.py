@@ -435,8 +435,8 @@ class GenerationEngine:
             
             if not auto_confirm:
                 try:
-                    user_input = input("\n是否继续执行？(y/N): ").strip().lower()
-                    if user_input != 'y':
+                    user_input = input("\n是否继续执行？(Y/n): ").strip().lower()
+                    if user_input == 'n':
                         logger.info("用户取消执行")
                         return RunResult(
                             run_dir=Path("."),
@@ -514,6 +514,23 @@ class GenerationEngine:
                 if len(specified_product_images) != len(specified_reference_images):
                     logger.warning(f"⚠️ 指定的产品图({len(specified_product_images)}张)和参考图({len(specified_reference_images)}张)数量不匹配")
                     logger.warning(f"   多出的图片将随机配对")
+                    
+                    if not auto_confirm:
+                        try:
+                            user_input = input("\n是否继续执行？(Y/n): ").strip().lower()
+                            if user_input == 'n':
+                                logger.info("用户取消执行")
+                                return RunResult(
+                                    run_dir=Path("."),
+                                    total_groups=template_cfg.group_count,
+                                    completed_groups=0,
+                                    total_images=0,
+                                    successful_images=0,
+                                    failed_images=0,
+                                    duration_seconds=time.time() - start_time,
+                                )
+                        except EOFError:
+                            logger.warning("非交互模式，自动继续执行")
         
         # 初始化生成日志
         generation_log = GenerationLog(
@@ -794,6 +811,9 @@ class GenerationEngine:
         all_selected_products = []
         all_selected_references = []
         
+        # 判断是否使用 OpenRouter（跳过 MOSS 上传）
+        use_openrouter = self._global_config.image_service == "openrouter"
+        
         for image_index, (prod_img, ref_img) in enumerate(group_tasks):
             image_num = image_index + 1
             
@@ -801,14 +821,21 @@ class GenerationEngine:
             if ref_img:
                 all_selected_references.append(ref_img)
             
-            # 上传图片
-            images_to_upload = [prod_img]
+            # 收集本地图片路径
+            local_image_paths = [prod_img]
             if ref_img:
-                images_to_upload.append(ref_img)
-            image_urls = self._upload_images(images_to_upload)
+                local_image_paths.append(ref_img)
             
-            # 刷新URL
-            fresh_urls = self._refresh_urls(images_to_upload)
+            # OpenRouter 直接使用本地路径，KieAI 需要上传到 MOSS
+            if use_openrouter:
+                # OpenRouter: 跳过上传，直接使用本地路径
+                image_urls = []  # 不需要 URL
+            else:
+                # KieAI: 上传图片到 MOSS
+                image_urls = self._upload_images(local_image_paths)
+                # 刷新URL
+                fresh_urls = self._refresh_urls(local_image_paths)
+                image_urls = fresh_urls if fresh_urls else image_urls
             
             # 构建模板上下文
             context = self.template_engine.build_context(
@@ -836,7 +863,8 @@ class GenerationEngine:
                 "image_num": image_num,
                 "prompt": rendered_prompt,
                 "output_path": output_path,
-                "image_urls": fresh_urls,
+                "image_urls": image_urls,
+                "local_image_paths": local_image_paths,  # 新增：本地路径
                 "product_image": prod_img,
                 "reference_image": ref_img,
             })
@@ -956,6 +984,7 @@ class GenerationEngine:
             prompt = task["prompt"]
             output_path = task["output_path"]
             image_urls = task["image_urls"]
+            local_image_paths = task.get("local_image_paths", [])
             task_log_prefix = f"{log_prefix}[{image_num}/{images_count}]"
             
             # 速率限制（仅 KieAI 需要）
@@ -965,15 +994,26 @@ class GenerationEngine:
             logger.info(f"{task_log_prefix} 🎨 开始生成...")
             
             try:
-                result = self.api_client.generate_image(
-                    prompt=prompt,
-                    image_urls=image_urls,
-                    output_path=output_path,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    output_format=output_format,
-                    log_prefix=task_log_prefix,
-                )
+                # 构建调用参数
+                generate_kwargs = {
+                    "prompt": prompt,
+                    "image_urls": image_urls,
+                    "output_path": output_path,
+                    "aspect_ratio": aspect_ratio,
+                    "resolution": resolution,
+                    "output_format": output_format,
+                    "log_prefix": task_log_prefix,
+                }
+                
+                # OpenRouter 支持本地路径参数
+                if local_image_paths and hasattr(self.api_client, 'generate_image'):
+                    # 检查是否是 OpenRouterImageClient（支持 local_image_paths）
+                    import inspect
+                    sig = inspect.signature(self.api_client.generate_image)
+                    if 'local_image_paths' in sig.parameters:
+                        generate_kwargs["local_image_paths"] = local_image_paths
+                
+                result = self.api_client.generate_image(**generate_kwargs)
                 
                 logger.info(f"{task_log_prefix} ✅ 完成")
                 
