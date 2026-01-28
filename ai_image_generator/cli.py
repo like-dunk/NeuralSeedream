@@ -134,13 +134,7 @@ def create_engine(
         # 加载 Few-shot 样本
         text_gen_cfg = template_config.text_generation
         if text_gen_cfg:
-            title_dir = config_manager.get_resolved_path("title_prompts", text_gen_cfg.title_prompts_dir or "Prompt/文案生成/标题")
-            content_dir = config_manager.get_resolved_path("content_prompts", text_gen_cfg.content_prompts_dir or "Prompt/文案生成/文案")
-            text_generator.load_few_shot_examples(
-                title_dir=title_dir,
-                content_dir=content_dir,
-                max_examples=text_gen_cfg.max_few_shot_examples,
-            )
+            pass
     
     # 创建引擎
     return GenerationEngine(

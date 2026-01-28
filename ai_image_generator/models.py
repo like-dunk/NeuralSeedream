@@ -51,7 +51,7 @@ class GlobalConfig:
     # OpenRouter 图片生成配置
     openrouter_image_api_key: str = ""
     openrouter_image_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_image_model: str = "google/gemini-2.5-flash-preview-05-20"
+    openrouter_image_model: str = "google/gemini-3-pro-image-preview"
     openrouter_image_site_url: str = ""
     openrouter_image_site_name: str = ""
     
@@ -75,17 +75,28 @@ class ImageSelectionConfig:
 
 
 @dataclass
+class PromptItem:
+    """单个 Prompt 项"""
+    id: str
+    name: str
+    description: str
+    enabled: bool
+    tags: List[str]
+    template: str
+
+
+@dataclass
 class ScenePromptConfig:
     """
     场景生成 Prompt 配置
-    
+
     特点：
     - 每组使用不同的 prompt（不重复随机）
     - 指定的 prompts 只占用对应数量的组，剩余组继续随机
     - prompt 用完后才会复用
     """
     source_dir: str = "Prompt/图片生成/场景生成"
-    specified_prompts: List[str] = field(default_factory=list)  # 指定的 prompt 文件名列表
+    specified_prompts: List[str] = field(default_factory=list)  # 指定的 prompt ID 列表
     custom_template: Optional[str] = None  # 自定义模板内容（优先级最高）
 
 
@@ -93,14 +104,14 @@ class ScenePromptConfig:
 class TransferPromptConfig:
     """
     主体迁移 Prompt 配置
-    
+
     特点：
     - 所有组共用同一个 prompt
     - 默认随机选择一个，也可以指定
     - 指定后所有组都使用该 prompt
     """
     source_dir: str = "Prompt/图片生成/主体迁移"
-    specified_prompt: Optional[str] = None  # 指定的单个 prompt 文件名
+    specified_prompt: Optional[str] = None  # 指定的单个 prompt ID
     custom_template: Optional[str] = None  # 自定义模板内容（优先级最高）
 
 
@@ -202,12 +213,61 @@ class ImageResult:
 
 
 @dataclass
+class ProductInfo:
+    """产品信息"""
+    product_name: str
+    brand: str = ""
+    category: str = "美妆"
+    style: str = "种草分享"
+    features: str = ""
+    target_audience: str = "年轻女性"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "product_name": self.product_name,
+            "brand": self.brand,
+            "category": self.category,
+            "style": self.style,
+            "features": self.features,
+            "target_audience": self.target_audience,
+        }
+
+
+@dataclass
 class TextResult:
     """文案生成结果"""
     title: str
     content: str
     success: bool
     error: Optional[str] = None
+
+    def validate(self) -> tuple[bool, Optional[str]]:
+        """
+        验证文案质量
+
+        Returns:
+            (is_valid, error_message)
+        """
+        # 检查标题长度
+        title_len = len(self.title)
+        if title_len < 10:
+            return False, f"标题过短（{title_len}字），建议15-30字"
+        if title_len > 50:
+            return False, f"标题过长（{title_len}字），建议15-30字"
+
+        # 检查正文长度
+        content_len = len(self.content)
+        if content_len < 100:
+            return False, f"正文过短（{content_len}字），建议200-500字"
+        if content_len > 1000:
+            return False, f"正文过长（{content_len}字），建议200-500字"
+
+        # 检查是否包含产品信息
+        if not self.title.strip() or not self.content.strip():
+            return False, "标题或正文为空"
+
+        return True, None
 
 
 @dataclass

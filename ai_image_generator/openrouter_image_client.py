@@ -25,7 +25,7 @@ class OpenRouterImageClient:
         self,
         api_key: str,
         base_url: str = "https://openrouter.ai/api/v1",
-        model: str = "google/gemini-2.5-flash-preview-05-20",
+        model: str = "google/gemini-3-pro-image-preview",
         site_url: Optional[str] = None,
         site_name: Optional[str] = None,
         timeout: float = 300.0,

@@ -25,7 +25,7 @@
   },
   "transfer_prompts": {
     "source_dir": "Prompt/图片生成/主体迁移",
-    "specified_prompt": null,
+    "specified_prompt": "product_to_background_v2",
     "custom_template": null
   },
   "output": {
@@ -52,6 +52,7 @@
   "template_variables": {
     "product_name": "海洋至尊护肤套装",
     "brand": "海洋至尊",
+    "category": "美妆",
     "style": "清新自然",
     "target_audience": "年轻女性",
     "features": "保湿滋润、温和不刺激"

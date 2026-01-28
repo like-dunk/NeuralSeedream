@@ -10,11 +10,19 @@
     "access_key_secret": "your_moss_access_key_secret",
     "bucket_name": "your_bucket_name"
   },
+  "image_service": "kieai",
   "openrouter": {
     "api_key": "your_openrouter_api_key",
     "base_url": "https://openrouter.ai/api/v1",
     "site_url": "https://your-site.com",
     "site_name": "Your-Site-Name",
     "model": "google/gemini-3-flash-preview"
+  },
+  "openrouter_image": {
+    "api_key": "your_openrouter_api_key",
+    "base_url": "https://openrouter.ai/api/v1",
+    "site_url": "https://your-site.com",
+    "site_name": "Your-Site-Name",
+    "model": "google/gemini-3-pro-image-preview"
   }
 }

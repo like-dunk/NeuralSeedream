@@ -2,12 +2,13 @@
 图片选择器 - 负责图片和Prompt的选择
 """
 
+import json
 import random
 from pathlib import Path
 from typing import List, Optional, Set, Tuple, TypeVar, Union
 
 from .exceptions import SelectionError
-from .models import SelectionMode
+from .models import PromptItem, SelectionMode
 
 T = TypeVar("T")
 
@@ -145,19 +146,84 @@ class ImageSelector:
         
         return images
     
+    def load_prompts_from_json(self, directory: Path) -> List[PromptItem]:
+        """
+        从目录下的 prompts.json 加载 Prompt 列表
+
+        Args:
+            directory: Prompt 目录路径
+
+        Returns:
+            PromptItem 对象列表（仅包含 enabled=true 的）
+
+        Raises:
+            SelectionError: 如果 JSON 文件不存在或格式错误
+        """
+        json_path = directory / "prompts.json"
+
+        if not json_path.exists():
+            raise SelectionError(f"Prompt 配置文件不存在: {json_path}")
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise SelectionError(f"Prompt 配置文件格式错误: {e}")
+        except Exception as e:
+            raise SelectionError(f"读取 Prompt 配置文件失败: {e}")
+
+        if "prompts" not in data:
+            raise SelectionError(f"Prompt 配置文件缺少 'prompts' 字段: {json_path}")
+
+        # 解析并过滤 enabled=true 的 prompts
+        prompts = []
+        for item in data["prompts"]:
+            try:
+                prompt = PromptItem(
+                    id=item["id"],
+                    name=item["name"],
+                    description=item.get("description", ""),
+                    enabled=item.get("enabled", True),
+                    tags=item.get("tags", []),
+                    template=item["template"],
+                )
+                # 只返回启用的 prompts
+                if prompt.enabled:
+                    prompts.append(prompt)
+            except KeyError as e:
+                raise SelectionError(f"Prompt 配置项缺少必需字段 {e}: {item}")
+
+        return prompts
+
+    def find_prompt_by_id(self, prompts: List[PromptItem], prompt_id: str) -> Optional[PromptItem]:
+        """
+        根据 ID 查找 Prompt
+
+        Args:
+            prompts: Prompt 列表
+            prompt_id: 目标 Prompt ID
+
+        Returns:
+            找到的 Prompt，未找到返回 None
+        """
+        for prompt in prompts:
+            if prompt.id == prompt_id:
+                return prompt
+        return None
+
     def list_prompts(self, directory: Path) -> List[Path]:
         """
         列出目录下所有Prompt文件
-        
+
         Args:
             directory: 目录路径
-            
+
         Returns:
             Prompt文件路径列表（已排序）
         """
         if not directory.exists() or not directory.is_dir():
             return []
-        
+
         prompts = []
         for p in sorted(directory.iterdir()):
             if not p.is_file():
@@ -168,7 +234,7 @@ class ImageSelector:
             # 检查扩展名
             if p.suffix.lower() in SUPPORTED_PROMPT_EXTENSIONS:
                 prompts.append(p)
-        
+
         return prompts
     
     def _parse_count(self, count: Union[int, List[int], Tuple[int, int]]) -> int:

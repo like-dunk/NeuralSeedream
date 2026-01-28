@@ -99,7 +99,7 @@ class ConfigManager:
         )
         openrouter_image_model = (
             openrouter_image_cfg.get("model") or 
-            "google/gemini-2.5-flash-preview-05-20"
+            "google/gemini-3-pro-image-preview"
         )
         
         # 验证：根据选择的服务检查必需的配置

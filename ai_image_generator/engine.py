@@ -20,6 +20,7 @@ from .models import (
     GenerationMode,
     GroupResult,
     ImageResult,
+    PromptItem,
     RunResult,
     TemplateContext,
     TextResult,
@@ -99,7 +100,7 @@ class GenerationEngine:
         self._global_config = None
         
         # 运行时状态
-        self._prompt_assignments: List[Path] = []  # 每组分配的prompt
+        self._prompt_assignments: List[PromptItem] = []  # 每组分配的prompt
         self._uploaded_urls: Dict[str, str] = {}  # 路径 -> URL映射
         self._uploaded_moss_ids: Dict[str, str] = {}  # 路径 -> moss_id映射
         self._upload_lock = threading.Lock()  # 上传缓存锁
@@ -183,41 +184,41 @@ class GenerationEngine:
 
     def _allocate_prompts_for_groups(
         self,
-        prompts: List[Path],
+        prompts: List["PromptItem"],
         group_count: int,
         mode: str,
-    ) -> List[Path]:
+    ) -> List["PromptItem"]:
         """
         根据模式为所有组分配 Prompt
-        
+
         场景生成模式：
         - 每组使用不同的 prompt（不重复随机）
         - 指定的 prompts 优先使用，剩余组继续随机
         - prompt 用完后才会复用
-        
+
         主体迁移模式：
         - 所有组共用同一个 prompt
         - 默认随机选择一个，也可以指定
-        
+
         Args:
-            prompts: 可用的 prompt 文件列表
+            prompts: 可用的 PromptItem 列表
             group_count: 组数
             mode: 生成模式
-            
+
         Returns:
-            每组对应的 prompt 路径列表
+            每组对应的 PromptItem 列表
         """
         template_cfg = self._template_config
-        
+
         if mode == "scene_generation":
             return self._allocate_scene_prompts(prompts, group_count)
         else:  # subject_transfer
             return self._allocate_transfer_prompts(prompts, group_count)
     
-    def _allocate_scene_prompts(self, prompts: List[Path], group_count: int) -> List[Path]:
+    def _allocate_scene_prompts(self, prompts: List["PromptItem"], group_count: int) -> List["PromptItem"]:
         """
         场景生成模式的 prompt 分配
-        
+
         规则：
         1. 指定的 prompts 优先分配给前面的组
         2. 剩余组从未使用的 prompts 中随机选择（不重复）
@@ -226,70 +227,82 @@ class GenerationEngine:
         template_cfg = self._template_config
         result = []
         used_prompts = set()
-        
+
         # 获取指定的 prompts
         specified = []
         if template_cfg.scene_prompts and template_cfg.scene_prompts.specified_prompts:
-            for spec in template_cfg.scene_prompts.specified_prompts:
-                found = self.image_selector.find_image_by_path(prompts, spec)
+            for prompt_id in template_cfg.scene_prompts.specified_prompts:
+                found = self.image_selector.find_prompt_by_id(prompts, prompt_id)
                 if found:
                     specified.append(found)
                 else:
-                    logger.warning(f"⚠️ 指定的 prompt 未找到: {spec}")
-        
+                    logger.warning(f"⚠️ 指定的 prompt 未找到: {prompt_id}")
+
         # 分配 prompts
         for i in range(group_count):
             previous = result[-1] if result else None
-            
+
             if i < len(specified):
                 # 使用指定的 prompt
                 selected = specified[i]
             else:
                 # 随机选择未使用的 prompt
-                selected = self.image_selector.select_unique_prompt(
-                    prompts=prompts,
-                    used_prompts=used_prompts,
-                    previous_prompt=str(previous) if previous else None,
-                )
-            
+                # 将 PromptItem 转换为 Path 对象以兼容现有的 select_unique_prompt 方法
+                # 使用 prompt.id 作为唯一标识
+                available = [p for p in prompts if p.id not in used_prompts]
+                if available:
+                    if previous:
+                        # 确保与上一组不同
+                        different = [p for p in available if p.id != previous.id]
+                        selected = random.choice(different) if different else random.choice(available)
+                    else:
+                        selected = random.choice(available)
+                else:
+                    # 所有 prompts 都用过了，复用但确保与上一组不同
+                    if previous and len(prompts) > 1:
+                        different = [p for p in prompts if p.id != previous.id]
+                        selected = random.choice(different) if different else prompts[0]
+                    else:
+                        selected = random.choice(prompts) if prompts else None
+
             if selected:
                 result.append(selected)
-                used_prompts.add(str(selected))
+                used_prompts.add(selected.id)
             elif prompts:
                 # 所有 prompts 都用过了，复用但确保与上一组不同
-                available = [p for p in prompts if str(p) != str(previous)] if previous else prompts
+                available = [p for p in prompts if p.id != previous.id] if previous else prompts
                 result.append(random.choice(available) if available else prompts[0])
             else:
                 result.append(None)
-        
+
         return result
     
-    def _allocate_transfer_prompts(self, prompts: List[Path], group_count: int) -> List[Path]:
+    def _allocate_transfer_prompts(self, prompts: List["PromptItem"], group_count: int) -> List["PromptItem"]:
         """
         主体迁移模式的 prompt 分配
-        
+
         规则：
         1. 如果指定了 prompt，所有组都使用该 prompt
         2. 否则随机选择一个，所有组共用
         """
         template_cfg = self._template_config
-        
+
         selected = None
-        
+
         # 检查是否指定了 prompt
         if template_cfg.transfer_prompts and template_cfg.transfer_prompts.specified_prompt:
-            spec = template_cfg.transfer_prompts.specified_prompt
-            selected = self.image_selector.find_image_by_path(prompts, spec)
+            prompt_id = template_cfg.transfer_prompts.specified_prompt
+            selected = self.image_selector.find_prompt_by_id(prompts, prompt_id)
             if not selected:
-                logger.warning(f"⚠️ 指定的 prompt 未找到: {spec}，将随机选择")
-        
+                logger.warning(f"⚠️ 指定的 prompt 未找到: {prompt_id}，将随机选择")
+
         # 如果没有指定或未找到，随机选择一个
         if not selected and prompts:
             selected = random.choice(prompts)
-        
+
         if selected:
             logger.info(f"📝 主体迁移模式：所有组使用 prompt: {selected.name}")
-        
+
         # 所有组使用同一个 prompt
         return [selected] * group_count
     
@@ -374,8 +387,8 @@ class GenerationEngine:
         
         prompts = []
         if "prompts" in paths:
-            prompts = self.image_selector.list_prompts(paths["prompts"])
-            logger.info(f"找到 {len(prompts)} 个Prompt文件")
+            prompts = self.image_selector.load_prompts_from_json(paths["prompts"])
+            logger.info(f"找到 {len(prompts)} 个可用 Prompt")
         
         # 计算每组需要的图片数量（使用最大值进行检查）
         images_per_group_cfg = template_cfg.images_per_group
@@ -757,15 +770,18 @@ class GenerationEngine:
                 logger.warning(f"{log_prefix} ⚠️ 可用图片不足，只能生成{len(group_tasks)}张")
         
         # 获取Prompt（本组所有任务使用相同Prompt）
-        prompt_path = self._prompt_assignments[group_index] if group_index < len(self._prompt_assignments) else None
+        prompt_item = self._prompt_assignments[group_index] if group_index < len(self._prompt_assignments) else None
         prompt_template = ""
-        if prompt_path:
-            prompt_template = self.template_engine.load_template(prompt_path)
+        prompt_source = ""
+        if prompt_item:
+            prompt_template = prompt_item.template
+            prompt_source = getattr(prompt_item, "id", "") or getattr(prompt_item, "name", "") or ""
         else:
             # 检查自定义模板
             custom_template = self._get_custom_template()
             if custom_template:
                 prompt_template = custom_template
+                prompt_source = "custom_template"
         
         # 创建组目录
         group_dir = self.output_manager.create_group_directory(group_num)
@@ -844,29 +860,31 @@ class GenerationEngine:
                     product_info = {
                         "product_name": template_cfg.template_variables.get("product_name", template_cfg.name),
                         "brand": template_cfg.template_variables.get("brand", ""),
+                        "category": template_cfg.template_variables.get("category", "美妆"),
                         "style": template_cfg.template_variables.get("style", "种草分享"),
                         "features": template_cfg.template_variables.get("features", ""),
                         "target_audience": template_cfg.template_variables.get("target_audience", "年轻女性"),
                     }
                     
                     text_data = self.text_generator.generate_sync(product_info)
-                    
+
                     # 移除 AI 生成的标签（如果有）
-                    content = text_data["content"]
+                    content = text_data.content
                     # 移除文案末尾的 # 标签
                     content = self._remove_ai_tags(content)
-                    
+
                     text_result = TextResult(
-                        title=text_data["title"],
+                        title=text_data.title,
                         content=content,
-                        success=True,
+                        success=text_data.success,
+                        error=text_data.error,
                     )
-                    logger.info(f"{log_prefix} 📝 文案生成成功: {text_data['title'][:30]}...")
-                    
+                    logger.info(f"{log_prefix} 📝 文案生成成功: {text_data.title[:30]}...")
+
                     # 保存文案到文件
                     text_file = group_dir / "text.txt"
                     with open(text_file, "w", encoding="utf-8") as f:
-                        f.write(f"标题：{text_data['title']}\n\n")
+                        f.write(f"标题：{text_data.title}\n\n")
                         f.write(f"文案：\n{content}\n")
                         
                         # 添加用户配置的标签
@@ -889,7 +907,7 @@ class GenerationEngine:
             group_dir=group_dir,
             product_images=all_selected_products,
             reference_images=all_selected_references,
-            prompt_template=str(prompt_path) if prompt_path else "",
+            prompt_template=prompt_source,
             prompt_rendered=tasks[0]["prompt"] if tasks else "",
             images=image_results,
             completed_at=datetime.now(),

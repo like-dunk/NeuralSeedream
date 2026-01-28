@@ -76,7 +76,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `source_dir` | string | ❌ | Prompt 目录，默认 `Prompt/图片生成/场景生成` |
-| `specified_prompts` | string[] | ❌ | 指定优先使用的 Prompt 文件名列表 |
+| `specified_prompts` | string[] | ❌ | 指定优先使用的 Prompt ID 列表 |
 | `custom_template` | string | ❌ | 自定义 Prompt 字符串（优先级最高） |
 
 ### 场景生成 Prompt 选择规则
@@ -85,22 +85,57 @@
 - 指定的 Prompts 优先分配给前面的组，剩余组继续随机
 - Prompt 用完后才会复用（确保相邻组不同）
 
-**示例：**
+### Prompt 管理方式
+
+所有 Prompt 统一在 `prompts.json` 文件中管理，结构如下：
+
+```json
+{
+  "version": "1.0",
+  "description": "场景生成 Prompt 库 - 用于生成产品在特定场景中的图片",
+  "prompts": [
+    {
+      "id": "wood_desk_storage_box",
+      "name": "木质桌面收纳盒场景",
+      "description": "产品放置在木质桌面上，旁边有收纳盒，适合家居类产品",
+      "enabled": true,
+      "tags": ["桌面", "木质", "收纳", "温馨", "家居"],
+      "template": "使用参考图中的产品主体作为唯一真实主体..."
+    }
+  ]
+}
+```
+
+**字段说明：**
+- `id`: Prompt 唯一标识符，用于在配置中引用
+- `name`: Prompt 显示名称
+- `description`: Prompt 描述说明
+- `enabled`: 是否启用（false 时不会被加载）
+- `tags`: 标签列表，用于分类和搜索
+- `template`: 实际的 Prompt 模板内容
+
+**CRUD 操作：**
+- **新增**: 在 `prompts` 数组中添加新对象
+- **修改**: 直接编辑对应的 Prompt 对象
+- **删除**: 删除对应对象或设置 `enabled: false`
+- **查询**: 通过 `id`、`name` 或 `tags` 查找
+
+**配置示例：**
 ```json
 {
   "scene_prompts": {
     "source_dir": "Prompt/图片生成/场景生成",
-    "specified_prompts": ["01_wood_desk_storage_box.j2", "02_wood_desk_bunny.j2"],
+    "specified_prompts": ["wood_desk_storage_box", "wood_desk_bunny"],
     "custom_template": null
   }
 }
 ```
 
-假设有 5 组，目录下有 4 个 Prompt 文件：
-- 组 1：使用 `01_wood_desk_storage_box.j2`（指定）
-- 组 2：使用 `02_wood_desk_bunny.j2`（指定）
-- 组 3：随机选择剩余的（如 `03_reading_desk_books.j2`）
-- 组 4：随机选择剩余的（如 `04_vanity_table_dog.j2`）
+假设有 5 组，prompts.json 中有 4 个启用的 Prompt：
+- 组 1：使用 `wood_desk_storage_box`（指定）
+- 组 2：使用 `wood_desk_bunny`（指定）
+- 组 3：随机选择剩余的（如 `reading_desk_books`）
+- 组 4：随机选择剩余的（如 `vanity_table_dog`）
 - 组 5：复用（确保与组 4 不同）
 
 ---
@@ -112,27 +147,62 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `source_dir` | string | ❌ | Prompt 目录，默认 `Prompt/图片生成/主体迁移` |
-| `specified_prompt` | string | ❌ | 指定使用的单个 Prompt 文件名 |
+| `specified_prompt` | string | ❌ | 指定使用的单个 Prompt ID |
 | `custom_template` | string | ❌ | 自定义 Prompt 字符串（优先级最高） |
 
 ### 主体迁移 Prompt 选择规则
 
 - **所有组共用同一个 Prompt**
-- 默认从目录中随机选择一个
+- 默认从 prompts.json 中随机选择一个
 - 如果指定了 `specified_prompt`，所有组都使用该 Prompt
 
-**示例：**
+### Prompt 管理方式
+
+所有 Prompt 统一在 `prompts.json` 文件中管理，结构如下：
+
+```json
+{
+  "version": "1.0",
+  "description": "主体迁移 Prompt 库 - 用于将产品主体迁移到参考背景中",
+  "prompts": [
+    {
+      "id": "product_to_background",
+      "name": "产品迁移到背景（标准版）",
+      "description": "保持产品主体不变，迁移到新背景中，去除背景中的原有产品",
+      "enabled": true,
+      "tags": ["标准", "通用", "主体迁移"],
+      "template": "保持图一参考图产品主体尺寸、材质、细节和文字不变..."
+    }
+  ]
+}
+```
+
+**字段说明：**
+- `id`: Prompt 唯一标识符，用于在配置中引用
+- `name`: Prompt 显示名称
+- `description`: Prompt 描述说明
+- `enabled`: 是否启用（false 时不会被加载）
+- `tags`: 标签列表，用于分类和搜索
+- `template`: 实际的 Prompt 模板内容
+
+**CRUD 操作：**
+- **新增**: 在 `prompts` 数组中添加新对象
+- **修改**: 直接编辑对应的 Prompt 对象
+- **删除**: 删除对应对象或设置 `enabled: false`
+- **查询**: 通过 `id`、`name` 或 `tags` 查找
+
+**配置示例：**
 ```json
 {
   "transfer_prompts": {
     "source_dir": "Prompt/图片生成/主体迁移",
-    "specified_prompt": "01_product_to_background.j2",
+    "specified_prompt": "product_to_background",
     "custom_template": null
   }
 }
 ```
 
-所有组都会使用 `01_product_to_background.j2`。
+所有组都会使用 `product_to_background` 这个 Prompt。如果不指定，系统会从 prompts.json 中随机选择一个启用的 Prompt。
 
 ---
 
@@ -229,12 +299,43 @@ outputs/
 
 自定义变量，可在 Prompt（.j2）模板中使用 `{{ 变量名 }}` 引用。
 
+### 文案生成专用字段
+
+以下字段用于文案生成功能，会传递给 OpenRouter API 生成小红书文案：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `product_name` | string | ✅ | 模板名称 | 产品名称 |
+| `brand` | string | ❌ | `""` | 品牌名称 |
+| `category` | string | ❌ | `"美妆"` | 产品类别，用于选择参考文案库 |
+| `style` | string | ❌ | `"种草分享"` | 文案风格 |
+| `features` | string | ❌ | `""` | 产品特点描述 |
+| `target_audience` | string | ❌ | `"年轻女性"` | 目标受众 |
+
+### category 产品类别
+
+`category` 字段决定使用哪个参考文案库：
+
+| 值 | 参考文案文件 |
+|----|-------------|
+| `美妆` | `文案库/美妆产品参考.json` |
+| `食品饮料` | `文案库/食品饮料参考.json` |
+| `服装配饰` | `文案库/服装配饰参考.json` |
+| `数码产品` | `文案库/数码产品参考.json` |
+
+如果指定的类别文件不存在，会自动降级使用 `美妆产品参考.json`。
+
 示例：
 ```json
 {
-  "product_name": "海洋至尊护肤套装",
-  "brand": "海洋至尊",
-  "style": "清新自然"
+  "template_variables": {
+    "product_name": "海洋至尊护肤套装",
+    "brand": "海洋至尊",
+    "category": "美妆",
+    "style": "种草分享",
+    "features": "保湿滋润、温和不刺激",
+    "target_audience": "年轻女性"
+  }
 }
 ```
 
@@ -382,7 +483,7 @@ python -m ai_image_generator -t templates/xxx.json --log-level DEBUG
   },
 
   "openrouter_image": {
-    "model": "google/gemini-2.5-flash-preview-05-20"
+    "model": "google/gemini-3-flash-preview"
   },
 
   "moss": {
@@ -418,7 +519,7 @@ OpenRouter 图片生成的独立配置。如果不配置，会复用 `openrouter
 
 | 字段 | 说明 |
 |------|------|
-| `model` | 图片生成模型，默认 `google/gemini-2.5-flash-preview-05-20` |
+| `model` | 图片生成模型，默认 `google/gemini-3-flash-preview` |
 | `api_key` | API 密钥（可选，默认复用 openrouter.api_key） |
 | `base_url` | API 地址（可选，默认复用 openrouter.base_url） |
 | `site_url` | 站点 URL（可选） |
