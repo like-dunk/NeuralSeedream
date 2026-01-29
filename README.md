@@ -22,7 +22,8 @@
   },
   "reference_images": {
     "source_dir": "参考图/我的参考图",
-    "specified_images": []
+    "specified_images": "",
+    "specified_coverage": 100
   },
   "scene_prompts": {
     "source_dir": "prompts/scene_generation.json",
@@ -129,16 +130,17 @@ python3 ai_image_generator.py -y           # 跳过确认提示
 
 | 字段 | 说明 |
 | --- | --- |
-| source_dir | 产品图目录 |
-| specified_images | 指定产品图路径列表（优先使用） |
-| specified_coverage | 指定图覆盖率（百分比，100 = 全用指定） |
+| source_dir | 产品图目录（支持递归扫描子文件夹） |
+| specified_images | 指定产品图路径列表（数组），每个元素代表每组中必须包含的一张产品图 |
+| specified_coverage | 指定图覆盖率（百分比），100 = 所有组都包含这些指定图，50 = 一半的组包含 |
 
 **参考图配置 reference_images**
 
 | 字段 | 说明 |
 | --- | --- |
-| source_dir | 参考图目录（主体迁移的背景参考） |
-| specified_images | 指定参考图路径列表 |
+| source_dir | 参考图目录（支持递归扫描子文件夹） |
+| specified_images | 指定参考图路径（字符串，只能指定一张），因为每组只能用一张背景参考图 |
+| specified_coverage | 指定图覆盖率（百分比），100 = 所有组都用这张图，50 = 一半的组用这张图 |
 
 **场景 Prompt 配置 scene_prompts**
 
@@ -190,10 +192,28 @@ python3 ai_image_generator.py -y           # 跳过确认提示
 
 | 规则 | 说明 |
 | --- | --- |
-| 组内不重复 | 同一组内的图片/Prompt 不会重复选择 |
-| 组间可重复 | 不同组之间可以使用相同的图片/Prompt |
-| 指定图片优先 | specified_images 中的图片会在每组优先使用 |
+| 目录递归扫描 | source_dir 会递归扫描所有子文件夹中的图片 |
+| 产品图组内不重复 | 同一组内的产品图不会重复选择 |
+| 产品图组间可重复 | 不同组之间可以使用相同的产品图 |
+| 参考图组间不重复 | 主体迁移模式下，每组使用不同的参考图作为背景（参考图用完后才会复用） |
+| 参考图组内共用 | 主体迁移模式下，同一组内所有产品图共用同一张背景参考图 |
+| 指定图片优先 | specified_images 中的图片会优先使用 |
 | 并发执行 | 支持多组同时生成，通过 max_concurrent_groups 控制 |
+
+**specified_images 区别**
+
+| 配置 | 类型 | 说明 |
+| --- | --- | --- |
+| product_images.specified_images | 数组 | 每个元素是一张产品图路径，这些图会在每组中优先使用 |
+| reference_images.specified_images | 字符串 | 只能指定一张参考图路径，根据 coverage 决定多少组使用这张图 |
+
+**主体迁移模式示例**
+
+```
+组1: 产品图A + 背景1, 产品图B + 背景1, 产品图C + 背景1  (同组共用背景1)
+组2: 产品图D + 背景2, 产品图E + 背景2, 产品图F + 背景2  (同组共用背景2)
+组3: 产品图G + 背景3, 产品图H + 背景3, 产品图I + 背景3  (同组共用背景3)
+```
 
 **常用命令**
 

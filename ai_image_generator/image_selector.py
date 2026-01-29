@@ -122,7 +122,7 @@ class ImageSelector:
     
     def list_images(self, directory: Path) -> List[Path]:
         """
-        列出目录下所有图片文件
+        列出目录下所有图片文件（递归遍历子文件夹）
         
         Args:
             directory: 目录路径
@@ -134,17 +134,26 @@ class ImageSelector:
             return []
         
         images = []
-        for p in sorted(directory.iterdir()):
-            if not p.is_file():
-                continue
-            # 忽略隐藏文件
-            if p.name.startswith("."):
-                continue
-            # 检查扩展名
-            if p.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
-                images.append(p)
         
-        return images
+        def scan_directory(dir_path: Path):
+            """递归扫描目录"""
+            for p in sorted(dir_path.iterdir()):
+                # 忽略隐藏文件和文件夹
+                if p.name.startswith("."):
+                    continue
+                
+                if p.is_dir():
+                    # 递归扫描子文件夹
+                    scan_directory(p)
+                elif p.is_file():
+                    # 检查扩展名
+                    if p.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        images.append(p)
+        
+        scan_directory(directory)
+        
+        # 按路径排序
+        return sorted(images)
     
     def load_prompts_from_json(self, path: Path) -> List[PromptItem]:
         """

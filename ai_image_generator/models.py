@@ -76,7 +76,7 @@ class ImageSelectionConfig:
     count_per_group: Union[int, List[int]] = 1  # 固定值或 [min, max]
     selection_mode: str = "random"  # random, sequential, specified
     must_include: Optional[str] = None
-    specified_images: List[str] = field(default_factory=list)
+    specified_images: Union[str, List[str]] = field(default_factory=list)  # 产品图用数组，参考图用字符串
     specified_coverage: int = 100  # 指定图片覆盖的组百分比，默认100%
 
 

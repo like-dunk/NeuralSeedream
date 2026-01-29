@@ -1,8 +1,8 @@
 {
-  "name": "敏卓美妆",
+  "name": "海洋至尊",
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
-  "group_count": 5,
+  "group_count": 10,
   "images_per_group": [
     3,
     5
@@ -10,13 +10,14 @@
   "product_images": {
     "source_dir": "产品图/海洋至尊",
     "specified_images": [
-      "产品图/海洋至尊/20260122-154506.jpeg"
+      ""
     ],
     "specified_coverage": 50
   },
   "reference_images": {
-    "source_dir": "参考图/小红书家用场景参考图",
-    "specified_images": []
+    "source_dir": "参考图",
+    "specified_images": "",
+    "specified_coverage": 100
   },
   "scene_prompts": {
     "source_dir": "prompts/scene_generation.json",
@@ -48,8 +49,8 @@
     ]
   },
   "template_variables": {
-    "product_name": "敏卓美妆护肤套装",
-    "brand": "敏卓美妆",
+    "product_name": "护肤套装",
+    "brand": "海洋至尊",
     "category": "美妆",
     "style": "清新自然",
     "target_audience": "年轻女性",

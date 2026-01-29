@@ -104,6 +104,7 @@ class GenerationEngine:
         
         # 运行时状态
         self._prompt_assignments: List[PromptItem] = []  # 每组分配的prompt
+        self._reference_assignments: List[Path] = []  # 每组分配的参考图（主体迁移模式）
         self._uploaded_urls: Dict[str, str] = {}  # 路径 -> URL映射
         self._uploaded_moss_ids: Dict[str, str] = {}  # 路径 -> moss_id映射
         self._upload_lock = threading.Lock()  # 上传缓存锁
@@ -312,6 +313,77 @@ class GenerationEngine:
         # 所有组使用同一个 prompt
         return [selected] * group_count
     
+    def _allocate_references_for_groups(
+        self,
+        reference_images: List[Path],
+        group_count: int,
+        specified_image: Optional[Path],
+        specified_coverage: int,
+    ) -> List[Path]:
+        """
+        为所有组预分配参考图（主体迁移模式专用）
+        
+        规则：
+        - 每组使用同一张参考图作为背景
+        - 组间不重复选择参考图
+        - 如果指定了参考图，根据 coverage 百分比决定多少组使用这张图
+        - 未指定或超出 coverage 的组随机选择（组间不重复）
+        
+        Args:
+            reference_images: 所有可用参考图
+            group_count: 组数
+            specified_image: 用户指定的单张参考图（可选）
+            specified_coverage: 指定图片覆盖的组百分比
+            
+        Returns:
+            每组对应的参考图列表
+        """
+        result = []
+        used_refs = set()
+        
+        # 计算指定图片覆盖的组数
+        coverage_groups = int(group_count * specified_coverage / 100) if specified_image else 0
+        
+        if specified_image and coverage_groups > 0:
+            logger.info(f"📷 指定参考图将覆盖前 {coverage_groups}/{group_count} 组 ({specified_coverage}%): {specified_image.name}")
+        
+        for i in range(group_count):
+            previous = result[-1] if result else None
+            
+            if specified_image and i < coverage_groups:
+                # 使用指定的参考图
+                selected = specified_image
+                logger.debug(f"组{i+1} 使用指定参考图: {selected.name}")
+            else:
+                # 随机选择未使用的参考图（排除已指定的图，避免重复）
+                exclude_set = used_refs.copy()
+                if specified_image:
+                    exclude_set.add(str(specified_image))
+                
+                available = [r for r in reference_images if str(r) not in exclude_set]
+                if available:
+                    if previous and len(available) > 1:
+                        # 确保与上一组不同
+                        different = [r for r in available if str(r) != str(previous)]
+                        selected = random.choice(different) if different else random.choice(available)
+                    else:
+                        selected = random.choice(available)
+                else:
+                    # 所有参考图都用过了，复用但确保与上一组不同
+                    if previous and len(reference_images) > 1:
+                        different = [r for r in reference_images if str(r) != str(previous)]
+                        selected = random.choice(different) if different else reference_images[0]
+                    else:
+                        selected = random.choice(reference_images) if reference_images else None
+            
+            if selected:
+                result.append(selected)
+                used_refs.add(str(selected))
+            else:
+                result.append(None)
+        
+        return result
+    
     def _get_custom_template(self) -> Optional[str]:
         """获取自定义模板内容"""
         template_cfg = self._template_config
@@ -423,9 +495,10 @@ class GenerationEngine:
                 warnings.append(
                     f"产品图数量不足: 每组最多需要 {max_images_per_group} 张，但只有 {len(product_images)} 张可用"
                 )
-            if len(reference_images) < max_images_per_group:
+            # 主体迁移模式：参考图是组间不重复，检查参考图数量是否足够组数
+            if len(reference_images) < template_cfg.group_count:
                 warnings.append(
-                    f"参考图数量不足: 每组最多需要 {max_images_per_group} 张，但只有 {len(reference_images)} 张可用"
+                    f"参考图数量不足: 需要 {template_cfg.group_count} 张（每组1张），但只有 {len(reference_images)} 张可用，超出的组将复用参考图"
                 )
         
         # 如果有警告，提示用户确认
@@ -457,6 +530,79 @@ class GenerationEngine:
                     # 非交互模式下无法获取输入
                     logger.warning("非交互模式，自动继续执行")
         
+        # 验证指定图片（在 dry-run 检查之前，这样用户可以看到验证结果）
+        specified_product_images = []
+        
+        prod_cfg = template_cfg.product_images
+        if prod_cfg.specified_images:
+            # 确保 specified_images 是列表，并过滤掉空字符串
+            if isinstance(prod_cfg.specified_images, list):
+                spec_list = [s for s in prod_cfg.specified_images if s]  # 过滤空字符串
+            elif prod_cfg.specified_images:
+                spec_list = [prod_cfg.specified_images]
+            else:
+                spec_list = []
+            
+            if spec_list:
+                specified_product_images, errors = self.image_selector.validate_specified_images(
+                    specified=spec_list,
+                    available_images=product_images,
+                )
+                if errors:
+                    for err in errors:
+                        logger.error(f"❌ 产品图: {err}")
+                    raise GeneratorError(f"指定产品图验证失败: {'; '.join(errors)}")
+                logger.info(f"📋 用户指定了 {len(specified_product_images)} 张产品图")
+        
+        # 主体迁移模式：验证并预分配参考图
+        specified_reference_image: Optional[Path] = None
+        if template_cfg.mode == "subject_transfer" and template_cfg.reference_images:
+            ref_cfg = template_cfg.reference_images
+            
+            # 参考图 specified_images 是字符串（只能指定一张）
+            # 为了兼容，如果用户误传了数组，取第一个并警告
+            specified_ref_path = None
+            if ref_cfg.specified_images:
+                if isinstance(ref_cfg.specified_images, str):
+                    specified_ref_path = ref_cfg.specified_images if ref_cfg.specified_images.strip() else None
+                elif isinstance(ref_cfg.specified_images, list) and len(ref_cfg.specified_images) > 0:
+                    # 兼容处理：取第一个非空元素
+                    for item in ref_cfg.specified_images:
+                        if item and item.strip():
+                            specified_ref_path = item
+                            break
+                    if specified_ref_path and len([x for x in ref_cfg.specified_images if x and x.strip()]) > 1:
+                        logger.warning(f"⚠️ 参考图只支持指定一张，将使用: {specified_ref_path}")
+            
+            if specified_ref_path:
+                # 验证指定的参考图
+                found = self.image_selector.find_image_by_path(reference_images, specified_ref_path)
+                if found:
+                    specified_reference_image = found
+                    logger.info(f"📋 用户指定了参考图: {specified_reference_image.name}")
+                else:
+                    raise GeneratorError(f"指定的参考图不存在: {specified_ref_path}")
+        
+        # 主体迁移模式：预分配每组的参考图（每组共用一张背景图，组间不重复）
+        if template_cfg.mode == "subject_transfer" and reference_images:
+            ref_cfg = template_cfg.reference_images
+            ref_specified_coverage = getattr(ref_cfg, 'specified_coverage', 100) if ref_cfg else 100
+            
+            self._reference_assignments = self._allocate_references_for_groups(
+                reference_images=reference_images,
+                group_count=template_cfg.group_count,
+                specified_image=specified_reference_image,
+                specified_coverage=ref_specified_coverage,
+            )
+            
+            # 打印分配结果
+            logger.info(f"📷 参考图分配完成（每组共用一张背景图）:")
+            for i, ref in enumerate(self._reference_assignments[:5]):  # 只显示前5组
+                if ref:
+                    logger.info(f"   组{i+1}: {ref.name}")
+            if len(self._reference_assignments) > 5:
+                logger.info(f"   ... 共 {len(self._reference_assignments)} 组")
+        
         if dry_run:
             logger.info("试运行模式，配置验证通过")
             return RunResult(
@@ -486,58 +632,6 @@ class GenerationEngine:
             mode=template_cfg.mode,
         )
         
-        # 验证指定图片
-        specified_product_images = []
-        specified_reference_images = []
-        
-        prod_cfg = template_cfg.product_images
-        if prod_cfg.specified_images:
-            specified_product_images, errors = self.image_selector.validate_specified_images(
-                specified=prod_cfg.specified_images,
-                available_images=product_images,
-            )
-            if errors:
-                for err in errors:
-                    logger.error(f"❌ 产品图: {err}")
-                raise GeneratorError(f"指定产品图验证失败: {'; '.join(errors)}")
-            logger.info(f"📋 用户指定了 {len(specified_product_images)} 张产品图")
-        
-        if template_cfg.mode == "subject_transfer" and template_cfg.reference_images:
-            ref_cfg = template_cfg.reference_images
-            if ref_cfg.specified_images:
-                specified_reference_images, errors = self.image_selector.validate_specified_images(
-                    specified=ref_cfg.specified_images,
-                    available_images=reference_images,
-                )
-                if errors:
-                    for err in errors:
-                        logger.error(f"❌ 参考图: {err}")
-                    raise GeneratorError(f"指定参考图验证失败: {'; '.join(errors)}")
-                logger.info(f"📋 用户指定了 {len(specified_reference_images)} 张参考图")
-            
-            # 检查主体迁移模式下指定数量是否匹配
-            if specified_product_images and specified_reference_images:
-                if len(specified_product_images) != len(specified_reference_images):
-                    logger.warning(f"⚠️ 指定的产品图({len(specified_product_images)}张)和参考图({len(specified_reference_images)}张)数量不匹配")
-                    logger.warning(f"   多出的图片将随机配对")
-                    
-                    if not auto_confirm:
-                        try:
-                            user_input = input("\n是否继续执行？(Y/n): ").strip().lower()
-                            if user_input == 'n':
-                                logger.info("用户取消执行")
-                                return RunResult(
-                                    run_dir=Path("."),
-                                    total_groups=template_cfg.group_count,
-                                    completed_groups=0,
-                                    total_images=0,
-                                    successful_images=0,
-                                    failed_images=0,
-                                    duration_seconds=time.time() - start_time,
-                                )
-                        except EOFError:
-                            logger.warning("非交互模式，自动继续执行")
-        
         # 初始化生成日志
         generation_log = GenerationLog(
             template_name=template_cfg.name,
@@ -553,7 +647,7 @@ class GenerationEngine:
         coverage_groups = int(template_cfg.group_count * specified_coverage / 100)
         
         if specified_product_images:
-            logger.info(f"📋 指定图片将覆盖前 {coverage_groups}/{template_cfg.group_count} 组 ({specified_coverage}%)")
+            logger.info(f"📋 指定产品图将覆盖前 {coverage_groups}/{template_cfg.group_count} 组 ({specified_coverage}%)")
         
         # 获取最大并发组数
         # 全局信号量已控制总并发数，组间不再需要额外限制
@@ -567,11 +661,10 @@ class GenerationEngine:
                 logger.info(f"⏭️ 跳过已完成的组 {group_index + 1}")
                 continue
             
-            use_specified = group_index < coverage_groups
+            use_specified_products = group_index < coverage_groups
             pending_groups.append({
                 "group_index": group_index,
-                "specified_product_images": specified_product_images if use_specified else [],
-                "specified_reference_images": specified_reference_images if use_specified else [],
+                "specified_product_images": specified_product_images if use_specified_products else [],
             })
         
         if not pending_groups:
@@ -605,9 +698,7 @@ class GenerationEngine:
                 group_result = self.run_group(
                     group_index=group_index,
                     product_images=product_images,
-                    reference_images=reference_images,
                     specified_product_images=group_info["specified_product_images"],
-                    specified_reference_images=group_info["specified_reference_images"],
                 )
                 
                 # 更新统计（线程安全）
@@ -670,21 +761,18 @@ class GenerationEngine:
         self,
         group_index: int,
         product_images: List[Path],
-        reference_images: List[Path],
         specified_product_images: List[Path],
-        specified_reference_images: List[Path],
     ) -> GroupResult:
         """
         执行单组生成
         
-        每组生成 images_per_group 张图片，同组内图片不重复
+        场景生成模式：每组生成 images_per_group 张图片，产品图组内不重复
+        主体迁移模式：每组共用一张参考图，产品图组内不重复
         
         Args:
             group_index: 组索引
             product_images: 所有可用产品图列表
-            reference_images: 所有可用参考图列表
             specified_product_images: 用户指定的产品图（优先使用）
-            specified_reference_images: 用户指定的参考图（优先使用）
             
         Returns:
             组结果
@@ -699,18 +787,22 @@ class GenerationEngine:
         # 确定本组生成图片数量
         images_per_group = self.image_selector._parse_count(template_cfg.images_per_group)
         
-        # 组内已使用的图片（每组重置）
+        # 组内已使用的产品图（每组重置）
         used_products_in_group = set()
-        used_references_in_group = set()
         
         # 为本组分配图片任务
         # 每个任务是一个元组：(product_image, reference_image or None)
         group_tasks = []
         
-        # 场景生成模式：每次请求1张产品图
-        # 主体迁移模式：每次请求1张产品图 + 1张参考图
+        # 获取本组的参考图（主体迁移模式，从预分配中获取）
+        group_reference_image = None
+        if template_cfg.mode == "subject_transfer" and group_index < len(self._reference_assignments):
+            group_reference_image = self._reference_assignments[group_index]
+            if group_reference_image:
+                logger.info(f"{log_prefix} 🖼️ 本组背景参考图: {group_reference_image.name}")
         
         if template_cfg.mode == "scene_generation":
+            # 场景生成模式：每次请求1张产品图
             # 1. 先添加指定的产品图
             for prod_img in specified_product_images:
                 if len(group_tasks) >= images_per_group:
@@ -733,65 +825,31 @@ class GenerationEngine:
                 logger.warning(f"{log_prefix} ⚠️ 可用产品图不足，只能生成{len(group_tasks)}张")
         
         else:  # subject_transfer
-            # 1. 先添加指定的配对
-            specified_pairs = min(len(specified_product_images), len(specified_reference_images))
-            for i in range(specified_pairs):
+            # 主体迁移模式：每组共用同一张参考图，产品图组内不重复
+            if not group_reference_image:
+                logger.error(f"{log_prefix} ❌ 未分配参考图，无法执行主体迁移")
+                raise GeneratorError(f"组{group_num}未分配参考图")
+            
+            # 1. 先添加指定的产品图（都配同一张参考图）
+            for prod_img in specified_product_images:
                 if len(group_tasks) >= images_per_group:
                     break
-                prod_img = specified_product_images[i]
-                ref_img = specified_reference_images[i]
-                if str(prod_img) not in used_products_in_group and str(ref_img) not in used_references_in_group:
-                    group_tasks.append((prod_img, ref_img))
+                if str(prod_img) not in used_products_in_group:
+                    group_tasks.append((prod_img, group_reference_image))
                     used_products_in_group.add(str(prod_img))
-                    used_references_in_group.add(str(ref_img))
             
-            # 2. 处理多出的指定图片（随机配对）
-            extra_prods = specified_product_images[specified_pairs:]
-            extra_refs = specified_reference_images[specified_pairs:]
-            
-            # 多出的产品图配随机参考图
-            available_refs = [r for r in reference_images if str(r) not in used_references_in_group]
-            random.shuffle(available_refs)
-            ref_idx = 0
-            for prod_img in extra_prods:
-                if len(group_tasks) >= images_per_group:
-                    break
-                if str(prod_img) not in used_products_in_group and ref_idx < len(available_refs):
-                    ref_img = available_refs[ref_idx]
-                    group_tasks.append((prod_img, ref_img))
-                    used_products_in_group.add(str(prod_img))
-                    used_references_in_group.add(str(ref_img))
-                    ref_idx += 1
-            
-            # 多出的参考图配随机产品图
+            # 2. 剩余任务随机选择产品图（组内不重复，都配同一张参考图）
             available_prods = [p for p in product_images if str(p) not in used_products_in_group]
             random.shuffle(available_prods)
-            prod_idx = 0
-            for ref_img in extra_refs:
+            
+            for prod_img in available_prods:
                 if len(group_tasks) >= images_per_group:
                     break
-                if str(ref_img) not in used_references_in_group and prod_idx < len(available_prods):
-                    prod_img = available_prods[prod_idx]
-                    group_tasks.append((prod_img, ref_img))
-                    used_products_in_group.add(str(prod_img))
-                    used_references_in_group.add(str(ref_img))
-                    prod_idx += 1
-            
-            # 3. 剩余任务随机配对（组内不重复）
-            available_prods = [p for p in product_images if str(p) not in used_products_in_group]
-            available_refs = [r for r in reference_images if str(r) not in used_references_in_group]
-            random.shuffle(available_prods)
-            random.shuffle(available_refs)
-            
-            for i in range(min(len(available_prods), len(available_refs))):
-                if len(group_tasks) >= images_per_group:
-                    break
-                group_tasks.append((available_prods[i], available_refs[i]))
-                used_products_in_group.add(str(available_prods[i]))
-                used_references_in_group.add(str(available_refs[i]))
+                group_tasks.append((prod_img, group_reference_image))
+                used_products_in_group.add(str(prod_img))
             
             if len(group_tasks) < images_per_group:
-                logger.warning(f"{log_prefix} ⚠️ 可用图片不足，只能生成{len(group_tasks)}张")
+                logger.warning(f"{log_prefix} ⚠️ 可用产品图不足，只能生成{len(group_tasks)}张")
         
         # 获取Prompt（本组所有任务使用相同Prompt）
         prompt_item = self._prompt_assignments[group_index] if group_index < len(self._prompt_assignments) else None
