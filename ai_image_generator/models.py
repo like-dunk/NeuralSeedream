@@ -149,6 +149,12 @@ class GenerationTarget(Enum):
     BOTH = "both"              # 同时生成图片和文案
 
 
+class ImageModel(Enum):
+    """图片生成模型"""
+    NANO_BANANA_PRO = "nano-banana-pro"
+    SEEDREAM_EDIT = "seedream/4.5-edit"
+
+
 @dataclass
 class TemplateConfig:
     """模板配置"""
@@ -160,6 +166,7 @@ class TemplateConfig:
     product_images: ImageSelectionConfig
     output: OutputConfig
     generation_target: str = "both"  # image_only, text_only, both
+    image_model: str = "nano-banana-pro"  # nano-banana-pro 或 seedream/4.5-edit
     reference_images: Optional[ImageSelectionConfig] = None
     template_variables: Dict[str, Any] = field(default_factory=dict)
     paths: Dict[str, str] = field(default_factory=dict)

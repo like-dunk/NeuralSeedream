@@ -12,6 +12,7 @@
 | `description` | string | ❌ | 任务描述 |
 | `mode` | string | ✅ | 生成模式，见下方说明 |
 | `generation_target` | string | ❌ | 生成目标，见下方说明 |
+| `image_model` | string | ❌ | 图片生成模型，见下方说明 |
 | `group_count` | int | ✅ | 生成组数，每组使用相同的 Prompt |
 | `images_per_group` | int 或 [min, max] | ✅ | 每组生成图片数 |
 
@@ -21,6 +22,26 @@
 |----|------|
 | `scene_generation` | 场景生成：产品图 + 场景 Prompt，生成产品在特定场景中的图片 |
 | `subject_transfer` | 主体迁移：产品图 + 参考背景图，将产品主体迁移到参考背景中 |
+
+### image_model 图片生成模型
+
+用于选择不同的 AI 图片生成模型。
+
+| 值 | 说明 |
+|----|------|
+| `nano-banana-pro` | KieAI Nano Banana Pro 模型（默认），支持多图输入，适合主体迁移 |
+| `seedream/4.5-edit` | KieAI Seedream 4.5 Edit 模型，图片编辑模型，适合风格转换 |
+
+示例：
+```json
+{
+  "image_model": "seedream/4.5-edit"
+}
+```
+
+**注意**：不同模型的参数支持可能不同：
+- `nano-banana-pro`：支持 `resolution`（1K/2K）、`output_format`（png/jpg）
+- `seedream/4.5-edit`：支持 `quality`（basic/high），宽高比格式为 `1:1`
 
 ### generation_target 生成目标
 

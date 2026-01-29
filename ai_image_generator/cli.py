@@ -17,6 +17,7 @@ from .image_selector import ImageSelector
 from .moss_uploader import MOSSUploader
 from .openrouter_image_client import OpenRouterImageClient
 from .output_manager import OutputManager
+from .seedream_client import SeedreamClient
 from .state_manager import StateManager
 from .template_engine import TemplateEngine
 from .text_generator import TextGenerator
@@ -89,7 +90,8 @@ def create_engine(
     
     # 根据配置选择图片生成服务
     image_service = global_config.image_service
-    api_client: Union[APIClient, OpenRouterImageClient]
+    image_model = template_config.image_model
+    api_client: Union[APIClient, OpenRouterImageClient, SeedreamClient]
     
     if image_service == "openrouter":
         logging.info(f"📡 使用 OpenRouter 图片生成服务, model={global_config.openrouter_image_model}")
@@ -103,12 +105,23 @@ def create_engine(
             site_name=global_config.openrouter_image_site_name,
             proxy=global_config.openrouter_image_proxy or None,
         )
+    elif image_model == "seedream/4.5-edit":
+        # 使用 Seedream 4.5 Edit 模型
+        logging.info(f"📡 使用 KieAI Seedream 4.5 Edit 图片生成服务")
+        api_client = SeedreamClient(
+            api_key=global_config.api_key,
+            base_url=global_config.api_base_url,
+            model="seedream/4.5-edit",
+            poll_interval=global_config.poll_interval,
+            max_wait=global_config.max_wait,
+        )
     else:
-        logging.info(f"📡 使用 KieAI 图片生成服务, model={global_config.model}")
+        # 默认使用 nano-banana-pro
+        logging.info(f"📡 使用 KieAI 图片生成服务, model={image_model or global_config.model}")
         api_client = APIClient(
             api_key=global_config.api_key,
             base_url=global_config.api_base_url,
-            model=global_config.model,
+            model=image_model or global_config.model,
             poll_interval=global_config.poll_interval,
             max_wait=global_config.max_wait,
         )

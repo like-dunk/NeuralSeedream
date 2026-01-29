@@ -256,6 +256,8 @@ class ConfigManager:
             name=data["name"],
             description=data.get("description", ""),
             mode=data["mode"],
+            generation_target=data.get("generation_target", "both"),
+            image_model=data.get("image_model", "nano-banana-pro"),
             group_count=int(data["group_count"]),
             images_per_group=data.get("images_per_group", 1),
             product_images=product_images,

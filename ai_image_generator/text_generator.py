@@ -263,6 +263,74 @@ class TextGenerator:
         
         return None
     
+    async def _generate_with_client(
+        self,
+        client: AsyncOpenAI,
+        full_prompt: str,
+        product_info: Dict[str, Any],
+        use_proxy: bool = False,
+        max_retries: Optional[int] = None,
+    ) -> TextResult:
+        """使用指定客户端生成文案（带重试）"""
+        mode_str = "代理" if use_proxy else "直连"
+        retries = max_retries if max_retries is not None else self.max_retries
+        
+        for attempt in range(retries):
+            try:
+                logger.debug(f"文案生成尝试 {attempt + 1}/{self.max_retries} ({mode_str})")
+
+                extra_headers = {}
+                if self.site_url:
+                    extra_headers["HTTP-Referer"] = self.site_url
+                if self.site_name:
+                    extra_headers["X-Title"] = self.site_name
+
+                completion = await client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "user", "content": full_prompt}
+                    ],
+                    extra_headers=extra_headers if extra_headers else None,
+                    temperature=self.temperature,
+                )
+
+                if completion.choices and completion.choices[0].message.content:
+                    content = completion.choices[0].message.content
+                    result = self._extract_json(content)
+
+                    if result and "title" in result and "content" in result:
+                        text_result = TextResult(
+                            title=str(result["title"]),
+                            content=str(result["content"]),
+                            success=True,
+                            error=None
+                        )
+
+                        # 验证文案质量
+                        is_valid, error_msg = text_result.validate()
+                        if not is_valid:
+                            logger.warning(f"文案质量验证失败: {error_msg}")
+                            if attempt < retries - 1:
+                                await asyncio.sleep(2 * (attempt + 1))
+                                continue
+
+                        logger.info(f"文案生成成功: {text_result.title[:30]}...")
+                        return text_result
+                    else:
+                        logger.warning(f"JSON 解析失败或缺少字段: {content[:200]}")
+
+            except Exception as e:
+                import traceback
+                error_type = type(e).__name__
+                logger.error(f"文案生成错误: {error_type}: {e} ({mode_str})")
+                logger.debug(f"详细堆栈: {traceback.format_exc()}")
+
+            if attempt < retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+
+        # 返回 None 表示该客户端失败
+        return None
+
     async def generate(
         self,
         product_info: Dict[str, Any],
@@ -295,70 +363,20 @@ class TextGenerator:
         # 渲染提示词模板
         full_prompt = self._render_prompt_template(product_info, reference_examples, context)
 
-        # 先尝试直连，连接失败再尝试代理
-        use_proxy = False
-        current_client = self.client
+        # 先尝试直连
+        result = await self._generate_with_client(self.client, full_prompt, product_info, use_proxy=False)
+        if result is not None:
+            return result
         
-        for attempt in range(self.max_retries):
-            try:
-                logger.debug(f"文案生成尝试 {attempt + 1}/{self.max_retries}" + (" (使用代理)" if use_proxy else " (直连)"))
-
-                extra_headers = {}
-                if self.site_url:
-                    extra_headers["HTTP-Referer"] = self.site_url
-                if self.site_name:
-                    extra_headers["X-Title"] = self.site_name
-
-                completion = await current_client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "user", "content": full_prompt}
-                    ],
-                    extra_headers=extra_headers if extra_headers else None,
-                    temperature=self.temperature,
-                )
-
-                if completion.choices and completion.choices[0].message.content:
-                    content = completion.choices[0].message.content
-                    result = self._extract_json(content)
-
-                    if result and "title" in result and "content" in result:
-                        text_result = TextResult(
-                            title=str(result["title"]),
-                            content=str(result["content"]),
-                            success=True,
-                            error=None
-                        )
-
-                        # 验证文案质量
-                        is_valid, error_msg = text_result.validate()
-                        if not is_valid:
-                            logger.warning(f"文案质量验证失败: {error_msg}")
-                            # 继续重试
-                            if attempt < self.max_retries - 1:
-                                await asyncio.sleep(2 * (attempt + 1))
-                                continue
-
-                        logger.info(f"文案生成成功: {text_result.title[:30]}...")
-                        return text_result
-                    else:
-                        logger.warning(f"JSON 解析失败或缺少字段: {content[:200]}")
-
-            except Exception as e:
-                import traceback
-                error_type = type(e).__name__
-                logger.error(f"文案生成错误: {error_type}: {e}" + (" (直连)" if not use_proxy else " (代理)"))
-                logger.debug(f"详细堆栈: {traceback.format_exc()}")
-                
-                # 如果是连接错误且有代理可用，切换到代理重试
-                if "Connection" in error_type and not use_proxy and self.client_with_proxy:
-                    logger.info("直连失败，切换到代理模式重试...")
-                    use_proxy = True
-                    current_client = self.client_with_proxy
-                    continue
-
-            if attempt < self.max_retries - 1:
-                await asyncio.sleep(2 * (attempt + 1))
+        # 直连失败，尝试代理（代理重试次数较少）
+        if self.client_with_proxy:
+            logger.info("直连失败，切换到代理模式重试...")
+            result = await self._generate_with_client(
+                self.client_with_proxy, full_prompt, product_info, 
+                use_proxy=True, max_retries=2
+            )
+            if result is not None:
+                return result
 
         # 返回默认值
         logger.error("文案生成失败，返回默认值")

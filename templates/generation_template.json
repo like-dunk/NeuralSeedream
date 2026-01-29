@@ -3,13 +3,14 @@
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
   "generation_target": "both",
+  "image_model": "seedream/4.5-edit",
   "group_count": 10,
   "images_per_group": [
     3,
     5
   ],
   "product_images": {
-    "source_dir": "产品图/化妆品2",
+    "source_dir": "产品图/化妆品3",
     "specified_images": [
       ""
     ],

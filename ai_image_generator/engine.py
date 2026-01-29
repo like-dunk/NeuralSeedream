@@ -109,8 +109,8 @@ class GenerationEngine:
         self._uploaded_moss_ids: Dict[str, str] = {}  # 路径 -> moss_id映射
         self._upload_lock = threading.Lock()  # 上传缓存锁
         
-        # 速率限制器：10秒10个新请求（仅 KieAI 需要）
-        self._rate_limiter = RateLimiter(max_requests=10, time_window=10.0)
+        # 速率限制器（仅 KieAI 需要）
+        self._rate_limiter = RateLimiter()  # 使用默认值：10秒20个请求
         self._use_rate_limiter = True  # 是否启用速率限制
         
         # 全局并发限制：最多100个同时进行的任务（组内+组外总和）
@@ -118,6 +118,19 @@ class GenerationEngine:
         
         # 生成日志锁
         self._log_lock = threading.Lock()
+    
+    def _get_generation_flags(self) -> Tuple[bool, bool]:
+        """
+        获取生成目标标志
+        
+        Returns:
+            (should_generate_images, should_generate_text)
+        """
+        generation_target = getattr(self._template_config, 'generation_target', 'both') or 'both'
+        should_generate_images = generation_target in ('image_only', 'both')
+        should_generate_text = generation_target in ('text_only', 'both')
+        return should_generate_images, should_generate_text
+
     
     def _load_configs(self):
         """加载配置"""
@@ -445,7 +458,11 @@ class GenerationEngine:
         template_cfg = self._template_config
         paths = self.config_manager.get_all_resolved_paths()
         
-        logger.info(f"开始生成: {template_cfg.name}, 模式={template_cfg.mode}, 组数={template_cfg.group_count}")
+        # 获取生成目标配置
+        should_generate_images, should_generate_text = self._get_generation_flags()
+        generation_target = getattr(template_cfg, 'generation_target', 'both') or 'both'
+        
+        logger.info(f"开始生成: {template_cfg.name}, 模式={template_cfg.mode}, 目标={generation_target}, 组数={template_cfg.group_count}")
         
         # 验证配置
         errors = self.config_manager.validate_config()
@@ -454,19 +471,24 @@ class GenerationEngine:
                 logger.error(f"配置错误: {err}")
             raise GeneratorError(f"配置验证失败: {errors}")
         
-        # 列出可用资源（在dry_run检查之前，用于验证）
-        product_images = self.image_selector.list_images(paths["product_images"])
-        logger.info(f"找到 {len(product_images)} 张产品图")
-        
+        # 列出可用资源（仅在需要生成图片时检查）
+        product_images = []
         reference_images = []
-        if "reference_images" in paths:
-            reference_images = self.image_selector.list_images(paths["reference_images"])
-            logger.info(f"找到 {len(reference_images)} 张参考图")
-        
         prompts = []
-        if "prompts" in paths:
-            prompts = self.image_selector.load_prompts_from_json(paths["prompts"])
-            logger.info(f"找到 {len(prompts)} 个可用 Prompt")
+        
+        if should_generate_images:
+            product_images = self.image_selector.list_images(paths["product_images"])
+            logger.info(f"找到 {len(product_images)} 张产品图")
+            
+            if "reference_images" in paths:
+                reference_images = self.image_selector.list_images(paths["reference_images"])
+                logger.info(f"找到 {len(reference_images)} 张参考图")
+            
+            if "prompts" in paths:
+                prompts = self.image_selector.load_prompts_from_json(paths["prompts"])
+                logger.info(f"找到 {len(prompts)} 个可用 Prompt")
+        else:
+            logger.info("⏭️ 跳过图片资源检查（generation_target=text_only）")
         
         # 计算每组需要的图片数量（使用最大值进行检查）
         images_per_group_cfg = template_cfg.images_per_group
@@ -475,42 +497,65 @@ class GenerationEngine:
         else:
             max_images_per_group = int(images_per_group_cfg) if images_per_group_cfg else 1
         
-        # 检查资源数量是否足够
+        # 检查资源数量是否足够（仅在需要生成图片时检查）
         warnings = []
         
-        # 检查 Prompt 数量（仅场景生成模式需要多个 prompt，主体迁移模式所有组共用一个）
-        if prompts and template_cfg.mode == "scene_generation" and len(prompts) < template_cfg.group_count:
-            warnings.append(
-                f"Prompt数量不足: 需要 {template_cfg.group_count} 个，但只有 {len(prompts)} 个可用，超出的组将随机复用"
-            )
+        # 检查 Seedream 模型的宽高比兼容性
+        aspect_ratio_converted = False
+        original_aspect_ratio = template_cfg.output.aspect_ratio
+        if should_generate_images and getattr(template_cfg, 'image_model', '') == 'seedream/4.5-edit':
+            seedream_supported = {"1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "21:9"}
+            aspect_ratio_mapping = {"4:5": "3:4", "5:4": "4:3"}
+            
+            if original_aspect_ratio not in seedream_supported:
+                mapped = aspect_ratio_mapping.get(original_aspect_ratio)
+                if mapped:
+                    warnings.append(
+                        f"Seedream 4.5 Edit 不支持宽高比 {original_aspect_ratio}，将自动转换为 {mapped}"
+                    )
+                    aspect_ratio_converted = True
+                else:
+                    warnings.append(
+                        f"Seedream 4.5 Edit 不支持宽高比 {original_aspect_ratio}，将使用默认值 1:1"
+                    )
+                    aspect_ratio_converted = True
         
-        # 检查图片数量
-        if template_cfg.mode == "scene_generation":
-            if len(product_images) < max_images_per_group:
+        if should_generate_images:
+            # 检查 Prompt 数量（仅场景生成模式需要多个 prompt，主体迁移模式所有组共用一个）
+            if prompts and template_cfg.mode == "scene_generation" and len(prompts) < template_cfg.group_count:
                 warnings.append(
-                    f"产品图数量不足: 每组最多需要 {max_images_per_group} 张，但只有 {len(product_images)} 张可用"
+                    f"Prompt数量不足: 需要 {template_cfg.group_count} 个，但只有 {len(prompts)} 个可用，超出的组将随机复用"
                 )
-        else:  # subject_transfer
-            if len(product_images) < max_images_per_group:
-                warnings.append(
-                    f"产品图数量不足: 每组最多需要 {max_images_per_group} 张，但只有 {len(product_images)} 张可用"
-                )
-            # 主体迁移模式：参考图是组间不重复，检查参考图数量是否足够组数
-            if len(reference_images) < template_cfg.group_count:
-                warnings.append(
-                    f"参考图数量不足: 需要 {template_cfg.group_count} 张（每组1张），但只有 {len(reference_images)} 张可用，超出的组将复用参考图"
-                )
+            
+            # 检查图片数量
+            if template_cfg.mode == "scene_generation":
+                if len(product_images) < max_images_per_group:
+                    warnings.append(
+                        f"产品图数量不足: 每组最多需要 {max_images_per_group} 张，但只有 {len(product_images)} 张可用"
+                    )
+            else:  # subject_transfer
+                if len(product_images) < max_images_per_group:
+                    warnings.append(
+                        f"产品图数量不足: 每组最多需要 {max_images_per_group} 张，但只有 {len(product_images)} 张可用"
+                    )
+                # 主体迁移模式：参考图是组间不重复，检查参考图数量是否足够组数
+                if len(reference_images) < template_cfg.group_count:
+                    warnings.append(
+                        f"参考图数量不足: 需要 {template_cfg.group_count} 张（每组1张），但只有 {len(reference_images)} 张可用，超出的组将复用参考图"
+                    )
         
         # 如果有警告，提示用户确认
         if warnings:
             for warn in warnings:
                 logger.warning(f"⚠️ {warn}")
             
-            actual_per_group = min(
-                len(product_images),
-                len(reference_images) if template_cfg.mode == "subject_transfer" else len(product_images)
-            )
-            logger.warning(f"⚠️ 实际每组只能生成 {actual_per_group} 张图片")
+            if should_generate_images:
+                actual_per_group = min(
+                    len(product_images),
+                    len(reference_images) if template_cfg.mode == "subject_transfer" else len(product_images)
+                )
+                if actual_per_group < max_images_per_group:
+                    logger.warning(f"⚠️ 实际每组只能生成 {actual_per_group} 张图片")
             
             if not auto_confirm:
                 try:
@@ -530,33 +575,34 @@ class GenerationEngine:
                     # 非交互模式下无法获取输入
                     logger.warning("非交互模式，自动继续执行")
         
-        # 验证指定图片（在 dry-run 检查之前，这样用户可以看到验证结果）
+        # 验证指定图片（仅在需要生成图片时）
         specified_product_images = []
         
-        prod_cfg = template_cfg.product_images
-        if prod_cfg.specified_images:
-            # 确保 specified_images 是列表，并过滤掉空字符串
-            if isinstance(prod_cfg.specified_images, list):
-                spec_list = [s for s in prod_cfg.specified_images if s]  # 过滤空字符串
-            elif prod_cfg.specified_images:
-                spec_list = [prod_cfg.specified_images]
-            else:
-                spec_list = []
-            
-            if spec_list:
-                specified_product_images, errors = self.image_selector.validate_specified_images(
-                    specified=spec_list,
-                    available_images=product_images,
-                )
+        if should_generate_images:
+            prod_cfg = template_cfg.product_images
+            if prod_cfg.specified_images:
+                # 确保 specified_images 是列表，并过滤掉空字符串
+                if isinstance(prod_cfg.specified_images, list):
+                    spec_list = [s for s in prod_cfg.specified_images if s]  # 过滤空字符串
+                elif prod_cfg.specified_images:
+                    spec_list = [prod_cfg.specified_images]
+                else:
+                    spec_list = []
+                
+                if spec_list:
+                    specified_product_images, errors = self.image_selector.validate_specified_images(
+                        specified=spec_list,
+                        available_images=product_images,
+                    )
                 if errors:
                     for err in errors:
                         logger.error(f"❌ 产品图: {err}")
                     raise GeneratorError(f"指定产品图验证失败: {'; '.join(errors)}")
                 logger.info(f"📋 用户指定了 {len(specified_product_images)} 张产品图")
         
-        # 主体迁移模式：验证并预分配参考图
+        # 主体迁移模式：验证并预分配参考图（仅在需要生成图片时）
         specified_reference_image: Optional[Path] = None
-        if template_cfg.mode == "subject_transfer" and template_cfg.reference_images:
+        if should_generate_images and template_cfg.mode == "subject_transfer" and template_cfg.reference_images:
             ref_cfg = template_cfg.reference_images
             
             # 参考图 specified_images 是字符串（只能指定一张）
@@ -583,8 +629,8 @@ class GenerationEngine:
                 else:
                     raise GeneratorError(f"指定的参考图不存在: {specified_ref_path}")
         
-        # 主体迁移模式：预分配每组的参考图（每组共用一张背景图，组间不重复）
-        if template_cfg.mode == "subject_transfer" and reference_images:
+        # 主体迁移模式：预分配每组的参考图（仅在需要生成图片时）
+        if should_generate_images and template_cfg.mode == "subject_transfer" and reference_images:
             ref_cfg = template_cfg.reference_images
             ref_specified_coverage = getattr(ref_cfg, 'specified_coverage', 100) if ref_cfg else 100
             
@@ -625,12 +671,13 @@ class GenerationEngine:
             run_dir=run_dir,
         )
         
-        # 预分配Prompt（根据模式使用不同策略）
-        self._prompt_assignments = self._allocate_prompts_for_groups(
-            prompts=prompts,
-            group_count=template_cfg.group_count,
-            mode=template_cfg.mode,
-        )
+        # 预分配Prompt（仅在需要生成图片时）
+        if should_generate_images:
+            self._prompt_assignments = self._allocate_prompts_for_groups(
+                prompts=prompts,
+                group_count=template_cfg.group_count,
+                mode=template_cfg.mode,
+            )
         
         # 初始化生成日志
         generation_log = GenerationLog(
@@ -753,7 +800,18 @@ class GenerationEngine:
         generation_log.summary = result.to_dict()
         self.output_manager.save_generation_log(generation_log)
         
-        logger.info(f"🎉 生成完成: {successful_images}/{total_images}张成功, 耗时{duration:.1f}秒")
+        # 根据生成目标输出不同的完成日志
+        if should_generate_images and should_generate_text:
+            # both 模式
+            text_success = sum(1 for g in group_results if g.text_result and g.text_result.success)
+            logger.info(f"🎉 生成完成: 图片 {successful_images}/{total_images} 张, 文案 {text_success}/{len(group_results)} 篇, 耗时 {duration:.1f}秒")
+        elif should_generate_images:
+            # image_only 模式
+            logger.info(f"🎉 图片生成完成: {successful_images}/{total_images} 张成功, 耗时 {duration:.1f}秒")
+        else:
+            # text_only 模式
+            text_success = sum(1 for g in group_results if g.text_result and g.text_result.success)
+            logger.info(f"🎉 文案生成完成: {text_success}/{len(group_results)} 篇成功, 耗时 {duration:.1f}秒")
         
         return result
 
@@ -781,113 +839,110 @@ class GenerationEngine:
         group_num = group_index + 1
         log_prefix = f"[组{group_num}]"
         
-        logger.info(f"{log_prefix} 📦 开始执行 (共{template_cfg.group_count}组)")
-        self.state_manager.mark_group_started(group_index)
+        # 获取生成目标配置
+        should_generate_images, should_generate_text = self._get_generation_flags()
+        generation_target = getattr(template_cfg, 'generation_target', 'both') or 'both'
         
-        # 确定本组生成图片数量
-        images_per_group = self.image_selector._parse_count(template_cfg.images_per_group)
-        
-        # 组内已使用的产品图（每组重置）
-        used_products_in_group = set()
-        
-        # 为本组分配图片任务
-        # 每个任务是一个元组：(product_image, reference_image or None)
-        group_tasks = []
-        
-        # 获取本组的参考图（主体迁移模式，从预分配中获取）
-        group_reference_image = None
-        if template_cfg.mode == "subject_transfer" and group_index < len(self._reference_assignments):
-            group_reference_image = self._reference_assignments[group_index]
-            if group_reference_image:
-                logger.info(f"{log_prefix} 🖼️ 本组背景参考图: {group_reference_image.name}")
-        
-        if template_cfg.mode == "scene_generation":
-            # 场景生成模式：每次请求1张产品图
-            # 1. 先添加指定的产品图
-            for prod_img in specified_product_images:
-                if len(group_tasks) >= images_per_group:
-                    break
-                if str(prod_img) not in used_products_in_group:
-                    group_tasks.append((prod_img, None))
-                    used_products_in_group.add(str(prod_img))
-            
-            # 2. 剩余任务随机选择（组内不重复）
-            available_prods = [p for p in product_images if str(p) not in used_products_in_group]
-            random.shuffle(available_prods)
-            
-            for prod_img in available_prods:
-                if len(group_tasks) >= images_per_group:
-                    break
-                group_tasks.append((prod_img, None))
-                used_products_in_group.add(str(prod_img))
-            
-            if len(group_tasks) < images_per_group:
-                logger.warning(f"{log_prefix} ⚠️ 可用产品图不足，只能生成{len(group_tasks)}张")
-        
-        else:  # subject_transfer
-            # 主体迁移模式：每组共用同一张参考图，产品图组内不重复
-            if not group_reference_image:
-                logger.error(f"{log_prefix} ❌ 未分配参考图，无法执行主体迁移")
-                raise GeneratorError(f"组{group_num}未分配参考图")
-            
-            # 1. 先添加指定的产品图（都配同一张参考图）
-            for prod_img in specified_product_images:
-                if len(group_tasks) >= images_per_group:
-                    break
-                if str(prod_img) not in used_products_in_group:
-                    group_tasks.append((prod_img, group_reference_image))
-                    used_products_in_group.add(str(prod_img))
-            
-            # 2. 剩余任务随机选择产品图（组内不重复，都配同一张参考图）
-            available_prods = [p for p in product_images if str(p) not in used_products_in_group]
-            random.shuffle(available_prods)
-            
-            for prod_img in available_prods:
-                if len(group_tasks) >= images_per_group:
-                    break
-                group_tasks.append((prod_img, group_reference_image))
-                used_products_in_group.add(str(prod_img))
-            
-            if len(group_tasks) < images_per_group:
-                logger.warning(f"{log_prefix} ⚠️ 可用产品图不足，只能生成{len(group_tasks)}张")
-        
-        # 获取Prompt（本组所有任务使用相同Prompt）
-        prompt_item = self._prompt_assignments[group_index] if group_index < len(self._prompt_assignments) else None
-        prompt_template = ""
-        prompt_source = ""
-        if prompt_item:
-            prompt_template = prompt_item.template
-            prompt_source = getattr(prompt_item, "id", "") or getattr(prompt_item, "name", "") or ""
+        # 根据模式显示不同的开始日志
+        if should_generate_images and should_generate_text:
+            logger.info(f"{log_prefix} 📦 开始生成图片和文案")
+        elif should_generate_images:
+            logger.info(f"{log_prefix} 📦 开始生成图片")
         else:
-            # 检查自定义模板
-            custom_template = self._get_custom_template()
-            if custom_template:
-                prompt_template = custom_template
-                prompt_source = "custom_template"
+            logger.info(f"{log_prefix} 📦 开始生成文案")
+        
+        self.state_manager.mark_group_started(group_index)
         
         # 创建组目录
         group_dir = self.output_manager.create_group_directory(group_num)
         
-        actual_images_count = len(group_tasks)
-        
-        # 获取生成目标配置
-        generation_target = getattr(template_cfg, 'generation_target', 'both') or 'both'
-        should_generate_images = generation_target in ('image_only', 'both')
-        should_generate_text = generation_target in ('text_only', 'both')
-        
-        if should_generate_images:
-            logger.info(f"{log_prefix} 📋 本组将生成 {actual_images_count} 张图片")
-        if should_generate_text:
-            logger.info(f"{log_prefix} 📝 本组将生成文案")
-        
-        # 准备所有生成任务
+        # 初始化结果变量
         tasks = []
         all_selected_products = []
         all_selected_references = []
         image_results = []
+        text_result = None
+        prompt_source = ""
         
-        # 仅在需要生成图片时准备图片任务
+        # ========== 图片生成部分 ==========
         if should_generate_images:
+            # 确定本组生成图片数量
+            images_per_group = self.image_selector._parse_count(template_cfg.images_per_group)
+            
+            # 组内已使用的产品图（每组重置）
+            used_products_in_group = set()
+            
+            # 为本组分配图片任务
+            group_tasks = []
+            
+            # 获取本组的参考图（主体迁移模式，从预分配中获取）
+            group_reference_image = None
+            if template_cfg.mode == "subject_transfer" and group_index < len(self._reference_assignments):
+                group_reference_image = self._reference_assignments[group_index]
+                if group_reference_image:
+                    logger.info(f"{log_prefix} 🖼️ 本组背景参考图: {group_reference_image.name}")
+            
+            if template_cfg.mode == "scene_generation":
+                # 场景生成模式
+                for prod_img in specified_product_images:
+                    if len(group_tasks) >= images_per_group:
+                        break
+                    if str(prod_img) not in used_products_in_group:
+                        group_tasks.append((prod_img, None))
+                        used_products_in_group.add(str(prod_img))
+                
+                available_prods = [p for p in product_images if str(p) not in used_products_in_group]
+                random.shuffle(available_prods)
+                
+                for prod_img in available_prods:
+                    if len(group_tasks) >= images_per_group:
+                        break
+                    group_tasks.append((prod_img, None))
+                    used_products_in_group.add(str(prod_img))
+                
+                if len(group_tasks) < images_per_group:
+                    logger.warning(f"{log_prefix} ⚠️ 可用产品图不足，只能生成{len(group_tasks)}张")
+            
+            else:  # subject_transfer
+                if not group_reference_image:
+                    logger.error(f"{log_prefix} ❌ 未分配参考图，无法执行主体迁移")
+                    raise GeneratorError(f"组{group_num}未分配参考图")
+                
+                for prod_img in specified_product_images:
+                    if len(group_tasks) >= images_per_group:
+                        break
+                    if str(prod_img) not in used_products_in_group:
+                        group_tasks.append((prod_img, group_reference_image))
+                        used_products_in_group.add(str(prod_img))
+                
+                available_prods = [p for p in product_images if str(p) not in used_products_in_group]
+                random.shuffle(available_prods)
+                
+                for prod_img in available_prods:
+                    if len(group_tasks) >= images_per_group:
+                        break
+                    group_tasks.append((prod_img, group_reference_image))
+                    used_products_in_group.add(str(prod_img))
+                
+                if len(group_tasks) < images_per_group:
+                    logger.warning(f"{log_prefix} ⚠️ 可用产品图不足，只能生成{len(group_tasks)}张")
+            
+            # 获取Prompt
+            prompt_item = self._prompt_assignments[group_index] if group_index < len(self._prompt_assignments) else None
+            prompt_template = ""
+            if prompt_item:
+                prompt_template = prompt_item.template
+                prompt_source = getattr(prompt_item, "id", "") or getattr(prompt_item, "name", "") or ""
+            else:
+                custom_template = self._get_custom_template()
+                if custom_template:
+                    prompt_template = custom_template
+                    prompt_source = "custom_template"
+            
+            actual_images_count = len(group_tasks)
+            logger.info(f"{log_prefix} 📋 本组将生成 {actual_images_count} 张图片")
+            
+            # 准备所有生成任务
             for image_index, (prod_img, ref_img) in enumerate(group_tasks):
                 image_num = image_index + 1
                 
@@ -935,7 +990,7 @@ class GenerationEngine:
                     "reference_image": ref_img,
                 })
             
-            # 并发执行生成任务
+            # 执行图片生成
             image_results = self._run_concurrent_generation_v2(
                 tasks=tasks,
                 group_num=group_num,
@@ -943,63 +998,59 @@ class GenerationEngine:
                 resolution=template_cfg.output.resolution,
                 output_format=template_cfg.output.format,
             )
-        else:
-            logger.info(f"{log_prefix} ⏭️ 跳过图片生成（generation_target={generation_target}）")
+        # text_only 模式下不需要显示跳过图片生成的日志，因为开始日志已经说明了
         
-        # 生成文案（如果启用且 generation_target 包含文案）
-        text_result = None
-        if should_generate_text and self.text_generator and self.text_generator.is_enabled():
-            text_gen_cfg = template_cfg.text_generation
-            if text_gen_cfg and text_gen_cfg.enabled:
-                logger.info(f"{log_prefix} 📝 开始生成文案...")
-                try:
-                    product_info = {
-                        "product_name": template_cfg.template_variables.get("product_name", template_cfg.name),
-                        "brand": template_cfg.template_variables.get("brand", ""),
-                        "category": template_cfg.template_variables.get("category", "美妆"),
-                        "style": template_cfg.template_variables.get("style", "种草分享"),
-                        "features": template_cfg.template_variables.get("features", ""),
-                        "target_audience": template_cfg.template_variables.get("target_audience", "年轻女性"),
-                    }
-                    
-                    text_data = self.text_generator.generate_sync(product_info)
-
-                    # 移除 AI 生成的标签（如果有）
-                    content = text_data.content
-                    # 移除文案末尾的 # 标签
-                    content = self._remove_ai_tags(content)
-
-                    text_result = TextResult(
-                        title=text_data.title,
-                        content=content,
-                        success=text_data.success,
-                        error=text_data.error,
-                    )
-                    logger.info(f"{log_prefix} 📝 文案生成成功: {text_data.title[:30]}...")
-
-                    # 保存文案到文件
-                    text_file = group_dir / "text.txt"
-                    with open(text_file, "w", encoding="utf-8") as f:
-                        f.write(f"标题：{text_data.title}\n\n")
-                        f.write(f"文案：\n{content}\n")
+        # ========== 文案生成部分 ==========
+        if should_generate_text:
+            if self.text_generator and self.text_generator.is_enabled():
+                text_gen_cfg = template_cfg.text_generation
+                if text_gen_cfg and text_gen_cfg.enabled:
+                    logger.info(f"{log_prefix} 📝 开始生成文案...")
+                    try:
+                        product_info = {
+                            "product_name": template_cfg.template_variables.get("product_name", template_cfg.name),
+                            "brand": template_cfg.template_variables.get("brand", ""),
+                            "category": template_cfg.template_variables.get("category", "美妆"),
+                            "style": template_cfg.template_variables.get("style", "种草分享"),
+                            "features": template_cfg.template_variables.get("features", ""),
+                            "target_audience": template_cfg.template_variables.get("target_audience", "年轻女性"),
+                        }
                         
-                        # 添加用户配置的标签
-                        if text_gen_cfg.tags:
-                            tags_str = " ".join([f"#{tag}" for tag in text_gen_cfg.tags])
-                            f.write(f"\n{tags_str}\n")
-                    
-                except Exception as e:
-                    logger.error(f"{log_prefix} 📝 文案生成失败: {e}")
-                    text_result = TextResult(
-                        title="",
-                        content="",
-                        success=False,
-                        error=str(e),
-                    )
-        elif should_generate_text:
-            logger.info(f"{log_prefix} ⏭️ 文案生成器未启用")
+                        text_data = self.text_generator.generate_sync(product_info)
+                        content = self._remove_ai_tags(text_data.content)
+
+                        text_result = TextResult(
+                            title=text_data.title,
+                            content=content,
+                            success=text_data.success,
+                            error=text_data.error,
+                        )
+                        logger.info(f"{log_prefix} 📝 文案生成成功: {text_data.title[:30]}...")
+
+                        # 保存文案到文件
+                        text_file = group_dir / "text.txt"
+                        with open(text_file, "w", encoding="utf-8") as f:
+                            f.write(f"标题：{text_data.title}\n\n")
+                            f.write(f"文案：\n{content}\n")
+                            if text_gen_cfg.tags:
+                                tags_str = " ".join([f"#{tag}" for tag in text_gen_cfg.tags])
+                                f.write(f"\n{tags_str}\n")
+                        
+                    except Exception as e:
+                        logger.error(f"{log_prefix} 📝 文案生成失败: {e}")
+                        text_result = TextResult(
+                            title="",
+                            content="",
+                            success=False,
+                            error=str(e),
+                        )
+                else:
+                    logger.info(f"{log_prefix} ⏭️ 文案生成未启用（text_generation.enabled=false）")
+            else:
+                logger.info(f"{log_prefix} ⏭️ 文案生成器未配置")
+        # image_only 模式下不需要显示跳过文案生成的日志，因为开始日志已经说明了
         
-        # 创建组结果
+        # ========== 创建组结果 ==========
         group_result = GroupResult(
             group_index=group_index,
             group_dir=group_dir,
@@ -1016,9 +1067,16 @@ class GenerationEngine:
         self.output_manager.save_group_result(group_result)
         self.state_manager.mark_group_complete(group_index, group_result)
         
-        # 统计结果
-        success_count = sum(1 for r in image_results if r.success)
-        logger.info(f"{log_prefix} 📊 完成: {success_count}/{len(image_results)} 张成功")
+        # 统计结果 - 合并为一行日志
+        stats = []
+        if should_generate_images and image_results:
+            success_count = sum(1 for r in image_results if r.success)
+            stats.append(f"图片 {success_count}/{len(image_results)}")
+        if should_generate_text and text_result:
+            stats.append(f"文案 {'✓' if text_result.success else '✗'}")
+        
+        if stats:
+            logger.info(f"{log_prefix} ✅ 完成 ({', '.join(stats)})")
         
         return group_result
     
