@@ -869,72 +869,86 @@ class GenerationEngine:
         group_dir = self.output_manager.create_group_directory(group_num)
         
         actual_images_count = len(group_tasks)
-        logger.info(f"{log_prefix} 📋 本组将生成 {actual_images_count} 张图片")
+        
+        # 获取生成目标配置
+        generation_target = getattr(template_cfg, 'generation_target', 'both') or 'both'
+        should_generate_images = generation_target in ('image_only', 'both')
+        should_generate_text = generation_target in ('text_only', 'both')
+        
+        if should_generate_images:
+            logger.info(f"{log_prefix} 📋 本组将生成 {actual_images_count} 张图片")
+        if should_generate_text:
+            logger.info(f"{log_prefix} 📝 本组将生成文案")
         
         # 准备所有生成任务
         tasks = []
         all_selected_products = []
         all_selected_references = []
+        image_results = []
         
-        for image_index, (prod_img, ref_img) in enumerate(group_tasks):
-            image_num = image_index + 1
+        # 仅在需要生成图片时准备图片任务
+        if should_generate_images:
+            for image_index, (prod_img, ref_img) in enumerate(group_tasks):
+                image_num = image_index + 1
+                
+                all_selected_products.append(prod_img)
+                if ref_img:
+                    all_selected_references.append(ref_img)
+                
+                # 上传图片
+                images_to_upload = [prod_img]
+                if ref_img:
+                    images_to_upload.append(ref_img)
+                image_urls = self._upload_images(images_to_upload)
+                
+                # 刷新URL
+                fresh_urls = self._refresh_urls(images_to_upload)
+                
+                # 构建模板上下文
+                context = self.template_engine.build_context(
+                    group_index=group_index,
+                    image_index=image_index,
+                    product_count=1,
+                    reference_count=1 if ref_img else 0,
+                    total_groups=template_cfg.group_count,
+                    mode=template_cfg.mode,
+                    custom_vars=template_cfg.template_variables,
+                )
+                
+                # 渲染Prompt
+                rendered_prompt = self.template_engine.render(prompt_template, context)
+                
+                # 输出路径
+                output_path = self.output_manager.get_output_path(
+                    group_num=group_num,
+                    image_num=image_num,
+                    extension=template_cfg.output.format,
+                )
+                
+                tasks.append({
+                    "image_index": image_index,
+                    "image_num": image_num,
+                    "prompt": rendered_prompt,
+                    "output_path": output_path,
+                    "image_urls": fresh_urls,
+                    "product_image": prod_img,
+                    "reference_image": ref_img,
+                })
             
-            all_selected_products.append(prod_img)
-            if ref_img:
-                all_selected_references.append(ref_img)
-            
-            # 上传图片
-            images_to_upload = [prod_img]
-            if ref_img:
-                images_to_upload.append(ref_img)
-            image_urls = self._upload_images(images_to_upload)
-            
-            # 刷新URL
-            fresh_urls = self._refresh_urls(images_to_upload)
-            
-            # 构建模板上下文
-            context = self.template_engine.build_context(
-                group_index=group_index,
-                image_index=image_index,
-                product_count=1,
-                reference_count=1 if ref_img else 0,
-                total_groups=template_cfg.group_count,
-                mode=template_cfg.mode,
-                custom_vars=template_cfg.template_variables,
-            )
-            
-            # 渲染Prompt
-            rendered_prompt = self.template_engine.render(prompt_template, context)
-            
-            # 输出路径
-            output_path = self.output_manager.get_output_path(
+            # 并发执行生成任务
+            image_results = self._run_concurrent_generation_v2(
+                tasks=tasks,
                 group_num=group_num,
-                image_num=image_num,
-                extension=template_cfg.output.format,
+                aspect_ratio=template_cfg.output.aspect_ratio,
+                resolution=template_cfg.output.resolution,
+                output_format=template_cfg.output.format,
             )
-            
-            tasks.append({
-                "image_index": image_index,
-                "image_num": image_num,
-                "prompt": rendered_prompt,
-                "output_path": output_path,
-                "image_urls": fresh_urls,
-                "product_image": prod_img,
-                "reference_image": ref_img,
-            })
+        else:
+            logger.info(f"{log_prefix} ⏭️ 跳过图片生成（generation_target={generation_target}）")
         
-        # 并发执行生成任务
-        image_results = self._run_concurrent_generation_v2(
-            tasks=tasks,
-            group_num=group_num,
-            aspect_ratio=template_cfg.output.aspect_ratio,
-            resolution=template_cfg.output.resolution,
-            output_format=template_cfg.output.format,
-        )
-        
-        # 生成文案（如果启用）
+        # 生成文案（如果启用且 generation_target 包含文案）
         text_result = None
-        if self.text_generator and self.text_generator.is_enabled():
+        if should_generate_text and self.text_generator and self.text_generator.is_enabled():
             text_gen_cfg = template_cfg.text_generation
             if text_gen_cfg and text_gen_cfg.enabled:
                 logger.info(f"{log_prefix} 📝 开始生成文案...")
@@ -982,6 +996,8 @@ class GenerationEngine:
                         success=False,
                         error=str(e),
                     )
+        elif should_generate_text:
+            logger.info(f"{log_prefix} ⏭️ 文案生成器未启用")
         
         # 创建组结果
         group_result = GroupResult(

@@ -11,6 +11,7 @@
 | `name` | string | ✅ | 任务名称，用于输出目录命名 |
 | `description` | string | ❌ | 任务描述 |
 | `mode` | string | ✅ | 生成模式，见下方说明 |
+| `generation_target` | string | ❌ | 生成目标，见下方说明 |
 | `group_count` | int | ✅ | 生成组数，每组使用相同的 Prompt |
 | `images_per_group` | int 或 [min, max] | ✅ | 每组生成图片数 |
 
@@ -20,6 +21,23 @@
 |----|------|
 | `scene_generation` | 场景生成：产品图 + 场景 Prompt，生成产品在特定场景中的图片 |
 | `subject_transfer` | 主体迁移：产品图 + 参考背景图，将产品主体迁移到参考背景中 |
+
+### generation_target 生成目标
+
+用于单独测试图片生成或文案生成功能，方便调试和验证。
+
+| 值 | 说明 |
+|----|------|
+| `both` | 同时生成图片和文案（默认） |
+| `image_only` | 仅生成图片，跳过文案生成 |
+| `text_only` | 仅生成文案，跳过图片生成 |
+
+示例：
+```json
+{
+  "generation_target": "image_only"
+}
+```
 
 ### images_per_group 每组图片数
 

@@ -2,20 +2,21 @@
   "name": "海洋至尊",
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
+  "generation_target": "both",
   "group_count": 10,
   "images_per_group": [
     3,
     5
   ],
   "product_images": {
-    "source_dir": "产品图/海洋至尊",
+    "source_dir": "产品图/化妆品2",
     "specified_images": [
       ""
     ],
     "specified_coverage": 50
   },
   "reference_images": {
-    "source_dir": "参考图",
+    "source_dir": "参考图/随手拍场景",
     "specified_images": "",
     "specified_coverage": 100
   },

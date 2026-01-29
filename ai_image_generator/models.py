@@ -142,6 +142,13 @@ class TextGenerationConfig:
     tags: List[str] = field(default_factory=list)  # 用户自定义标签列表
 
 
+class GenerationTarget(Enum):
+    """生成目标"""
+    IMAGE_ONLY = "image_only"  # 仅生成图片
+    TEXT_ONLY = "text_only"    # 仅生成文案
+    BOTH = "both"              # 同时生成图片和文案
+
+
 @dataclass
 class TemplateConfig:
     """模板配置"""
@@ -152,6 +159,7 @@ class TemplateConfig:
     images_per_group: Union[int, List[int]]  # 固定值或 [min, max]
     product_images: ImageSelectionConfig
     output: OutputConfig
+    generation_target: str = "both"  # image_only, text_only, both
     reference_images: Optional[ImageSelectionConfig] = None
     template_variables: Dict[str, Any] = field(default_factory=dict)
     paths: Dict[str, str] = field(default_factory=dict)

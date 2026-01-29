@@ -13,6 +13,7 @@
   "name": "我的任务名称",
   "description": "任务描述（可选）",
   "mode": "scene_generation",
+  "generation_target": "both",
   "group_count": 3,
   "images_per_group": [2, 4],
   "product_images": {
@@ -123,8 +124,19 @@ python3 ai_image_generator.py -y           # 跳过确认提示
 | name | 任务名称（体现在输出目录名） |
 | description | 备注说明（不影响生成） |
 | mode | 生成模式 scene_generation / subject_transfer |
+| generation_target | 生成目标 both / image_only / text_only，默认 both |
 | group_count | 生成多少组 |
 | images_per_group | 每组生成多少张，固定值 4 或范围 [min, max] |
+
+**generation_target 生成目标**
+
+用于单独测试图片生成或文案生成功能：
+
+| 值 | 说明 |
+| --- | --- |
+| both | 同时生成图片和文案（默认） |
+| image_only | 仅生成图片，跳过文案生成 |
+| text_only | 仅生成文案，跳过图片生成 |
 
 **产品图配置 product_images**
 
