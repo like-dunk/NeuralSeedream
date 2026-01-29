@@ -5,6 +5,7 @@
 import asyncio
 import json
 import logging
+import random
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,8 @@ class TextGenerator:
         reference_json_path: Optional[str] = None,
         reference_base_dir: Optional[str] = None,
         proxy: Optional[str] = None,
+        reference_min_samples: int = 3,
+        reference_max_samples: int = 5,
     ):
         """
         初始化文案生成器
@@ -50,6 +53,8 @@ class TextGenerator:
             reference_json_path: 参考文案 JSON 路径（已废弃，使用 reference_base_dir）
             reference_base_dir: 参考文案目录，按类别组织
             proxy: 代理地址（如 http://user:pass@host:port）
+            reference_min_samples: 参考文案最少抽取数量（默认3条）
+            reference_max_samples: 参考文案最多抽取数量（默认5条）
         """
         self.api_key = api_key
         self.base_url = base_url
@@ -59,6 +64,8 @@ class TextGenerator:
         self.temperature = temperature
         self.max_retries = max_retries
         self.proxy = proxy
+        self.reference_min_samples = reference_min_samples
+        self.reference_max_samples = reference_max_samples
 
         # 模板和参考文案路径
         self.prompt_template_path = Path(prompt_template_path) if prompt_template_path else Path("prompts/text_template.j2")
@@ -74,19 +81,26 @@ class TextGenerator:
                 self.reference_base_dir = Path("文案库")
 
         # 初始化 OpenAI 异步客户端
+        # 先创建直连客户端，如果连接失败再尝试代理
         self.client: Optional[AsyncOpenAI] = None
+        self.client_with_proxy: Optional[AsyncOpenAI] = None
+        
         if api_key:
-            # 配置 httpx 客户端以支持代理
-            import httpx
-            http_client = None
-            if proxy:
-                http_client = httpx.AsyncClient(proxy=proxy)
-            
+            # 直连客户端（无代理）
             self.client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                http_client=http_client,
             )
+            
+            # 代理客户端（备用）
+            if proxy:
+                import httpx
+                http_client = httpx.AsyncClient(proxy=proxy)
+                self.client_with_proxy = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    http_client=http_client,
+                )
 
         # 初始化 Jinja2 环境
         self._jinja_env: Optional[Environment] = None
@@ -137,13 +151,13 @@ class TextGenerator:
     
     def _load_reference_examples(self, category: str = "美妆") -> List[Dict[str, str]]:
         """
-        从 JSON 文件加载参考文案
+        从 JSON 文件加载参考文案，随机抽取指定数量
 
         Args:
             category: 产品类别，用于选择对应的参考文案文件
 
         Returns:
-            参考文案列表
+            随机抽取的参考文案列表
         """
         # 尝试加载分类文件
         category_file = self.reference_base_dir / f"{category}产品参考.json"
@@ -164,18 +178,25 @@ class TextGenerator:
                 except json.JSONDecodeError:
                     f.seek(0)
                     raw = f.read()
-                    # 修复常见问题：正文中包含未转义的双引号（例如 把"洗干净"写成 把"洗干净"）
-                    # 这里将夹在中文字符之间的双引号替换为中文引号，避免破坏 JSON 结构。
+                    # 修复常见问题：正文中包含未转义的双引号
                     raw_fixed = re.sub(
                         r'(?<=[\u4e00-\u9fff])"([^"\n\r]{1,50})"(?=[\u4e00-\u9fff])',
-                        r'“\1”',
+                        r'"\1"',
                         raw,
                     )
                     data = json.loads(raw_fixed)
 
             if isinstance(data, list):
-                logger.info(f"加载了 {len(data)} 条参考文案（类别：{category}）")
-                return data
+                total_count = len(data)
+                # 随机决定抽取数量（使用配置的min/max值）
+                sample_count = random.randint(
+                    self.reference_min_samples, 
+                    min(self.reference_max_samples, total_count)
+                )
+                # 随机抽取
+                sampled_data = random.sample(data, sample_count) if total_count >= sample_count else data
+                logger.info(f"从 {total_count} 条参考文案中随机抽取了 {len(sampled_data)} 条（类别：{category}）")
+                return sampled_data
             else:
                 logger.warning("参考文案 JSON 格式不正确，应为数组")
                 return []
@@ -268,15 +289,19 @@ class TextGenerator:
         # 获取产品类别
         category = product_info.get("category", "美妆")
 
-        # 加载参考文案
+        # 加载参考文案（随机抽取3-5条）
         reference_examples = self._load_reference_examples(category)
 
         # 渲染提示词模板
         full_prompt = self._render_prompt_template(product_info, reference_examples, context)
 
+        # 先尝试直连，连接失败再尝试代理
+        use_proxy = False
+        current_client = self.client
+        
         for attempt in range(self.max_retries):
             try:
-                logger.debug(f"文案生成尝试 {attempt + 1}/{self.max_retries}")
+                logger.debug(f"文案生成尝试 {attempt + 1}/{self.max_retries}" + (" (使用代理)" if use_proxy else " (直连)"))
 
                 extra_headers = {}
                 if self.site_url:
@@ -284,7 +309,7 @@ class TextGenerator:
                 if self.site_name:
                     extra_headers["X-Title"] = self.site_name
 
-                completion = await self.client.chat.completions.create(
+                completion = await current_client.chat.completions.create(
                     model=self.model,
                     messages=[
                         {"role": "user", "content": full_prompt}
@@ -320,7 +345,17 @@ class TextGenerator:
                         logger.warning(f"JSON 解析失败或缺少字段: {content[:200]}")
 
             except Exception as e:
-                logger.error(f"文案生成错误: {e}")
+                import traceback
+                error_type = type(e).__name__
+                logger.error(f"文案生成错误: {error_type}: {e}" + (" (直连)" if not use_proxy else " (代理)"))
+                logger.debug(f"详细堆栈: {traceback.format_exc()}")
+                
+                # 如果是连接错误且有代理可用，切换到代理重试
+                if "Connection" in error_type and not use_proxy and self.client_with_proxy:
+                    logger.info("直连失败，切换到代理模式重试...")
+                    use_proxy = True
+                    current_client = self.client_with_proxy
+                    continue
 
             if attempt < self.max_retries - 1:
                 await asyncio.sleep(2 * (attempt + 1))

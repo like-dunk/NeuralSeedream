@@ -133,6 +133,8 @@ def create_engine(
             site_url=global_config.openrouter_site_url,
             site_name=global_config.openrouter_site_name,
             proxy=global_config.openrouter_proxy or None,
+            reference_min_samples=global_config.reference_min_samples,
+            reference_max_samples=global_config.reference_max_samples,
         )
         
         # 加载 Few-shot 样本

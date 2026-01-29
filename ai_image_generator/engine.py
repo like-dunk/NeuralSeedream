@@ -108,9 +108,12 @@ class GenerationEngine:
         self._uploaded_moss_ids: Dict[str, str] = {}  # 路径 -> moss_id映射
         self._upload_lock = threading.Lock()  # 上传缓存锁
         
-        # 速率限制器：10秒8个请求（仅 KieAI 需要）
-        self._rate_limiter = RateLimiter(max_requests=8, time_window=10.0)
+        # 速率限制器：10秒10个新请求（仅 KieAI 需要）
+        self._rate_limiter = RateLimiter(max_requests=10, time_window=10.0)
         self._use_rate_limiter = True  # 是否启用速率限制
+        
+        # 全局并发限制：最多100个同时进行的任务（组内+组外总和）
+        self._concurrent_semaphore = threading.Semaphore(100)
         
         # 生成日志锁
         self._log_lock = threading.Lock()
@@ -552,15 +555,10 @@ class GenerationEngine:
         if specified_product_images:
             logger.info(f"📋 指定图片将覆盖前 {coverage_groups}/{template_cfg.group_count} 组 ({specified_coverage}%)")
         
-        # 获取最大并发组数 - 根据服务类型自动调整
+        # 获取最大并发组数
+        # 全局信号量已控制总并发数，组间不再需要额外限制
         max_concurrent_groups = template_cfg.output.max_concurrent_groups
-        
-        # KieAI 有速率限制，强制限制并发组数
-        if self._global_config.image_service == "kieai":
-            max_concurrent_groups = min(max_concurrent_groups, 4)
-            logger.info(f"🚀 最大并发组数: {max_concurrent_groups} (KieAI 限制)")
-        else:
-            logger.info(f"🚀 最大并发组数: {max_concurrent_groups}")
+        logger.info(f"🚀 最大并发组数: {max_concurrent_groups}")
         
         # 收集待执行的组
         pending_groups = []
@@ -980,7 +978,7 @@ class GenerationEngine:
         retry_delay_base = 5  # 基础重试延迟（秒）
         
         def generate_single(task: Dict) -> Tuple[int, ImageResult]:
-            """生成单张图片（带重试）"""
+            """生成单张图片（带重试，受全局并发限制）"""
             image_index = task["image_index"]
             image_num = task["image_num"]
             prompt = task["prompt"]
@@ -990,84 +988,87 @@ class GenerationEngine:
             
             last_error = None
             
-            for attempt in range(max_retries + 1):
-                # 速率限制（仅 KieAI 需要）
-                if self._use_rate_limiter:
-                    self._rate_limiter.acquire()
-                
-                if attempt == 0:
-                    logger.info(f"{task_log_prefix} 🎨 开始生成...")
-                else:
-                    logger.info(f"{task_log_prefix} 🔄 重试 {attempt}/{max_retries}...")
-                
-                try:
-                    result = self.api_client.generate_image(
-                        prompt=prompt,
-                        image_urls=image_urls,
-                        output_path=output_path,
-                        aspect_ratio=aspect_ratio,
-                        resolution=resolution,
-                        output_format=output_format,
-                        log_prefix=task_log_prefix,
-                    )
+            # 获取全局并发许可
+            self._concurrent_semaphore.acquire()
+            try:
+                for attempt in range(max_retries + 1):
+                    # 速率限制（仅 KieAI 需要）
+                    if self._use_rate_limiter:
+                        self._rate_limiter.acquire()
                     
-                    logger.info(f"{task_log_prefix} ✅ 完成")
-                    
-                    return image_index, ImageResult(
-                        index=image_index,
-                        output_path=output_path,
-                        task_id=result.task_id,
-                        prompt=prompt,
-                        input_images=image_urls,
-                        success=True,
-                    )
-                    
-                except Exception as e:
-                    last_error = e
-                    error_str = str(e)
-                    
-                    # 判断是否可重试的错误
-                    is_retryable = (
-                        "429" in error_str or  # 速率限制
-                        "too high" in error_str.lower() or  # 频率过高
-                        "timeout" in error_str.lower() or  # 超时
-                        "timed out" in error_str.lower() or
-                        "500" in error_str or  # 服务器内部错误
-                        "502" in error_str or  # 网关错误
-                        "503" in error_str or  # 服务不可用
-                        "520" in error_str or  # Cloudflare 错误
-                        "522" in error_str or  # Cloudflare 连接超时
-                        "524" in error_str or  # Cloudflare 超时
-                        "fail" in error_str.lower()  # KieAI 任务失败
-                    )
-                    
-                    if is_retryable and attempt < max_retries:
-                        # 指数退避延迟
-                        delay = retry_delay_base * (2 ** attempt)
-                        logger.warning(f"{task_log_prefix} ⚠️ 失败: {e}，{delay}秒后重试...")
-                        time.sleep(delay)
-                        continue
+                    if attempt == 0:
+                        logger.info(f"{task_log_prefix} 🎨 开始生成...")
                     else:
-                        logger.error(f"{task_log_prefix} ❌ 失败: {e}")
-                        break
-            
-            # 所有重试都失败
-            return image_index, ImageResult(
-                index=image_index,
-                output_path=output_path,
-                task_id="",
-                prompt=prompt,
-                input_images=image_urls,
-                success=False,
-                error=str(last_error),
-            )
+                        logger.info(f"{task_log_prefix} 🔄 重试 {attempt}/{max_retries}...")
+                    
+                    try:
+                        result = self.api_client.generate_image(
+                            prompt=prompt,
+                            image_urls=image_urls,
+                            output_path=output_path,
+                            aspect_ratio=aspect_ratio,
+                            resolution=resolution,
+                            output_format=output_format,
+                            log_prefix=task_log_prefix,
+                        )
+                        
+                        logger.info(f"{task_log_prefix} ✅ 完成")
+                        
+                        return image_index, ImageResult(
+                            index=image_index,
+                            output_path=output_path,
+                            task_id=result.task_id,
+                            prompt=prompt,
+                            input_images=image_urls,
+                            success=True,
+                        )
+                        
+                    except Exception as e:
+                        last_error = e
+                        error_str = str(e)
+                        
+                        # 判断是否可重试的错误
+                        is_retryable = (
+                            "429" in error_str or  # 速率限制
+                            "too high" in error_str.lower() or  # 频率过高
+                            "timeout" in error_str.lower() or  # 超时
+                            "timed out" in error_str.lower() or
+                            "500" in error_str or  # 服务器内部错误
+                            "502" in error_str or  # 网关错误
+                            "503" in error_str or  # 服务不可用
+                            "520" in error_str or  # Cloudflare 错误
+                            "522" in error_str or  # Cloudflare 连接超时
+                            "524" in error_str or  # Cloudflare 超时
+                            "fail" in error_str.lower()  # KieAI 任务失败
+                        )
+                        
+                        if is_retryable and attempt < max_retries:
+                            # 指数退避延迟
+                            delay = retry_delay_base * (2 ** attempt)
+                            logger.warning(f"{task_log_prefix} ⚠️ 失败: {e}，{delay}秒后重试...")
+                            time.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"{task_log_prefix} ❌ 失败: {e}")
+                            break
+                
+                # 所有重试都失败
+                return image_index, ImageResult(
+                    index=image_index,
+                    output_path=output_path,
+                    task_id="",
+                    prompt=prompt,
+                    input_images=image_urls,
+                    success=False,
+                    error=str(last_error),
+                )
+            finally:
+                # 释放全局并发许可
+                self._concurrent_semaphore.release()
         
         # 使用线程池并发执行
-        # KieAI 限制组内最多5个并发，OpenRouter 不限制
-        if self._use_rate_limiter:
-            max_workers = min(len(tasks), 5)
-        else:
-            max_workers = len(tasks)  # OpenRouter 全并发
+        # 组内不限制并发数，由全局信号量控制总并发（最多100个同时进行的任务）
+        max_workers = len(tasks)
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(generate_single, task): task for task in tasks}

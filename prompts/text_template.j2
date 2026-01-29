@@ -17,7 +17,6 @@
 {% for example in reference_examples %}
 {{ loop.index }}. 标题：{{ example.title }}
    文案：{{ example.text[:200] }}...
-{% if loop.index >= 5 %}{% break %}{% endif %}
 {% endfor %}
 
 # 创作要求

@@ -63,6 +63,10 @@ class GlobalConfig:
     openrouter_site_url: str = ""
     openrouter_site_name: str = ""
     openrouter_proxy: str = ""  # 代理地址
+    
+    # 文案生成参考文案配置
+    reference_min_samples: int = 3  # 参考文案最少抽取数量
+    reference_max_samples: int = 5  # 参考文案最多抽取数量
 
 
 @dataclass

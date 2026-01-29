@@ -83,6 +83,7 @@ class ConfigManager:
         moss_cfg = data.get("moss", {})
         openrouter_cfg = data.get("openrouter", {})
         openrouter_image_cfg = data.get("openrouter_image", {})
+        text_gen_cfg = data.get("text_generator", {})
         
         # 图片生成服务选择（默认 kieai）
         image_service = data.get("image_service", "kieai")
@@ -156,6 +157,9 @@ class ConfigManager:
             openrouter_site_url=os.getenv("OPENROUTER_SITE_URL") or openrouter_cfg.get("site_url", ""),
             openrouter_site_name=os.getenv("OPENROUTER_SITE_NAME") or openrouter_cfg.get("site_name", ""),
             openrouter_proxy=os.getenv("OPENROUTER_PROXY") or openrouter_cfg.get("proxy", ""),
+            # 文案生成参考文案配置
+            reference_min_samples=int(text_gen_cfg.get("reference_min_samples", 3)),
+            reference_max_samples=int(text_gen_cfg.get("reference_max_samples", 5)),
         )
         
         return self._global_config

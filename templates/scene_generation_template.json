@@ -22,7 +22,7 @@
     "aspect_ratio": "4:5",
     "resolution": "2K",
     "format": "png",
-    "max_concurrent_groups": 3
+    "max_concurrent_groups": 500
   },
 
   "template_variables": {

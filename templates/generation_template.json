@@ -2,7 +2,7 @@
   "name": "敏卓美妆",
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
-  "group_count": 10,
+  "group_count": 5,
   "images_per_group": [
     3,
     5
@@ -33,7 +33,7 @@
     "aspect_ratio": "4:5",
     "resolution": "2K",
     "format": "png",
-    "max_concurrent_groups": 3,
+    "max_concurrent_groups": 500,
     "generate_text": true
   },
   "text_generation": {
