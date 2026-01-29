@@ -14,6 +14,7 @@
   "description": "任务描述（可选）",
   "mode": "scene_generation",
   "generation_target": "both",
+  "image_model": "nano-banana-pro",
   "group_count": 3,
   "images_per_group": [2, 4],
   "product_images": {
@@ -125,8 +126,27 @@ python3 ai_image_generator.py -y           # 跳过确认提示
 | description | 备注说明（不影响生成） |
 | mode | 生成模式 scene_generation / subject_transfer |
 | generation_target | 生成目标 both / image_only / text_only，默认 both |
+| image_model | 图片生成模型，见下方说明 |
 | group_count | 生成多少组 |
 | images_per_group | 每组生成多少张，固定值 4 或范围 [min, max] |
+
+**image_model 图片生成模型**
+
+| 值 | 说明 |
+| --- | --- |
+| nano-banana-pro | KieAI Nano Banana Pro 模型（默认），支持多图输入，适合主体迁移 |
+| seedream/4.5-edit | KieAI Seedream 4.5 Edit 模型，图片编辑模型，适合风格转换 |
+
+配置示例：
+```json
+{
+  "image_model": "seedream/4.5-edit"
+}
+```
+
+注意事项：
+- `nano-banana-pro`：支持宽高比 `4:5`、分辨率 `1K/2K`、输出格式 `png/jpg`
+- `seedream/4.5-edit`：支持宽高比 `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9`，不支持 `4:5`（会自动转换为 `3:4` 并提示确认）
 
 **generation_target 生成目标**
 
