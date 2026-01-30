@@ -109,9 +109,7 @@ class ConfigManager:
         if image_service == "openrouter":
             if not openrouter_image_api_key:
                 raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.api_key", field="openrouter.api_key")
-            openrouter_proxy = openrouter_image_cfg.get("proxy") or os.getenv("OPENROUTER_PROXY") or openrouter_cfg.get("proxy", "")
-            if not openrouter_proxy:
-                raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.proxy（代理地址）", field="openrouter.proxy")
+            # proxy 为可选配置，允许为空（直连）
         
         self._global_config = GlobalConfig(
             # 服务选择

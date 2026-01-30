@@ -109,7 +109,7 @@ class OpenRouterImageClient:
                 "modalities": ["image", "text"],
             }
             
-            with httpx.Client(timeout=self.timeout, proxy=self.proxy) as http_client:
+            with httpx.Client(timeout=self.timeout, proxy=self.proxy, trust_env=False) as http_client:
                 api_response = http_client.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,
