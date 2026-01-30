@@ -3,12 +3,64 @@
 """
 
 import json
+import logging
 import random
+import re
 from pathlib import Path
 from typing import List, Optional, Set, Tuple, TypeVar, Union
 
 from .exceptions import SelectionError
 from .models import PromptItem, SelectionMode
+
+logger = logging.getLogger(__name__)
+
+
+def natural_sort_key(path: Path) -> List:
+    """
+    自然排序键函数，让数字按数值大小排序
+    与 macOS Finder 默认排序方式一致
+    例如: 1, 2, 3, 10, 11 而不是 1, 10, 11, 2, 3
+    """
+    def convert(text):
+        return int(text) if text.isdigit() else text.lower()
+    
+    return [convert(c) for c in re.split(r'(\d+)', path.name)]
+
+
+def get_finder_sort_order(directory: Path) -> Optional[List[str]]:
+    """
+    尝试从 .DS_Store 读取 Finder 的自定义排序顺序
+    
+    Args:
+        directory: 目录路径
+        
+    Returns:
+        文件名列表（按 Finder 排序），如果无法读取返回 None
+    """
+    ds_store_path = directory / ".DS_Store"
+    if not ds_store_path.exists():
+        return None
+    
+    try:
+        from ds_store import DSStore
+        
+        with DSStore.open(str(ds_store_path), 'r') as d:
+            # 收集所有有 Iloc（图标位置）的文件
+            iloc_entries = {}
+            for e in d:
+                if e.code == b'Iloc' and e.value:
+                    iloc_entries[e.filename] = e.value
+            
+            if len(iloc_entries) > 1:
+                # 按 y 坐标排序（从上到下），然后按 x 坐标（从左到右）
+                sorted_files = sorted(iloc_entries.items(), key=lambda x: (x[1][1], x[1][0]))
+                return [name for name, _ in sorted_files]
+    except ImportError:
+        logger.debug("ds-store 库未安装，使用自然排序")
+    except Exception as e:
+        logger.debug(f"读取 .DS_Store 失败: {e}")
+    
+    return None
 
 T = TypeVar("T")
 
@@ -124,11 +176,15 @@ class ImageSelector:
         """
         列出目录下所有图片文件（递归遍历子文件夹）
         
+        排序优先级：
+        1. 尝试从 .DS_Store 读取 Finder 自定义排序
+        2. 回退到自然排序（与 Finder 默认排序一致）
+        
         Args:
             directory: 目录路径
             
         Returns:
-            图片文件路径列表（已排序）
+            图片文件路径列表（按 Finder 显示顺序排列）
         """
         if not directory.exists() or not directory.is_dir():
             return []
@@ -137,7 +193,7 @@ class ImageSelector:
         
         def scan_directory(dir_path: Path):
             """递归扫描目录"""
-            for p in sorted(dir_path.iterdir()):
+            for p in dir_path.iterdir():
                 # 忽略隐藏文件和文件夹
                 if p.name.startswith("."):
                     continue
@@ -152,8 +208,20 @@ class ImageSelector:
         
         scan_directory(directory)
         
-        # 按路径排序
-        return sorted(images)
+        # 尝试从 .DS_Store 获取 Finder 排序
+        finder_order = get_finder_sort_order(directory)
+        
+        if finder_order and len(finder_order) >= len(images):
+            # 使用 Finder 自定义排序
+            order_map = {name: i for i, name in enumerate(finder_order)}
+            images.sort(key=lambda p: order_map.get(p.name, float('inf')))
+            logger.debug(f"使用 Finder 自定义排序: {directory}")
+        else:
+            # 回退到自然排序
+            images.sort(key=natural_sort_key)
+            logger.debug(f"使用自然排序: {directory}")
+        
+        return images
     
     def load_prompts_from_json(self, path: Path) -> List[PromptItem]:
         """
