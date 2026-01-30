@@ -66,7 +66,6 @@
 ```bash
 python3 ai_image_generator.py --dry-run    # 验证配置（推荐先执行）
 python3 ai_image_generator.py              # 执行生成
-python3 ai_image_generator.py -y           # 跳过确认提示
 ```
 
 默认使用 `templates/generation_template.json` 配置文件。
