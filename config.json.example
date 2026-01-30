@@ -10,6 +10,11 @@
     "access_key_secret": "your_moss_access_key_secret",
     "bucket_name": "your_bucket_name"
   },
+  "gcs": {
+    "bucket_name": "your-gcs-bucket-name",
+    "folder_path": "ImageUpload",
+    "credentials_path": "/path/to/service-account.json"
+  },
   "image_service": "kieai",
   "openrouter": {
     "api_key": "your_openrouter_api_key",
@@ -25,6 +30,6 @@
     "site_url": "https://your-site.com",
     "site_name": "Your-Site-Name",
     "model": "google/gemini-3-pro-image-preview",
-    "proxy": "http://user:pass@proxy-host:port"
+    "proxy": null
   }
 }

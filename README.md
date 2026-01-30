@@ -118,7 +118,6 @@ python3 ai_image_generator.py              # 执行生成
 **配置字段说明**
 
 **基础配置**
-
 | 字段 | 说明 |
 | --- | --- |
 | name | 任务名称（体现在输出目录名） |
@@ -130,7 +129,6 @@ python3 ai_image_generator.py              # 执行生成
 | images_per_group | 每组生成多少张，固定值 4 或范围 [min, max] |
 
 **image_model 图片生成模型**
-
 | 值 | 说明 |
 | --- | --- |
 | nano-banana-pro | KieAI Nano Banana Pro 模型（默认），支持多图输入，适合主体迁移 |
@@ -148,9 +146,7 @@ python3 ai_image_generator.py              # 执行生成
 - `seedream/4.5-edit`：支持宽高比 `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9`，不支持 `4:5`（会自动转换为 `3:4` 并提示确认）
 
 **generation_target 生成目标**
-
 用于单独测试图片生成或文案生成功能：
-
 | 值 | 说明 |
 | --- | --- |
 | both | 同时生成图片和文案（默认） |
@@ -158,7 +154,6 @@ python3 ai_image_generator.py              # 执行生成
 | text_only | 仅生成文案，跳过图片生成 |
 
 **产品图配置 product_images**
-
 | 字段 | 说明 |
 | --- | --- |
 | source_dir | 产品图目录（支持递归扫描子文件夹） |
@@ -166,7 +161,6 @@ python3 ai_image_generator.py              # 执行生成
 | specified_coverage | 指定图覆盖率（百分比），100 = 所有组都包含这些指定图，50 = 一半的组包含 |
 
 **参考图配置 reference_images**
-
 | 字段 | 说明 |
 | --- | --- |
 | source_dir | 参考图目录（支持递归扫描子文件夹） |
@@ -174,7 +168,6 @@ python3 ai_image_generator.py              # 执行生成
 | specified_coverage | 指定图覆盖率（百分比），100 = 所有组都用这张图，50 = 一半的组用这张图 |
 
 **场景 Prompt 配置 scene_prompts**
-
 | 字段 | 说明 |
 | --- | --- |
 | source_dir | Prompt 库文件路径 |
@@ -182,7 +175,6 @@ python3 ai_image_generator.py              # 执行生成
 | custom_template | 自定义 Prompt 文本（优先使用） |
 
 **主体迁移 Prompt 配置 transfer_prompts**
-
 | 字段 | 说明 |
 | --- | --- |
 | source_dir | Prompt 库文件路径 |
@@ -190,7 +182,6 @@ python3 ai_image_generator.py              # 执行生成
 | custom_template | 自定义 Prompt 文本（优先使用） |
 
 **输出配置 output**
-
 | 字段 | 说明 |
 | --- | --- |
 | base_dir | 输出根目录 |
@@ -201,7 +192,6 @@ python3 ai_image_generator.py              # 执行生成
 | generate_text | 是否生成文案文件 text.txt |
 
 **文案生成配置 text_generation**
-
 | 字段 | 说明 |
 | --- | --- |
 | enabled | 是否启用文案生成 |
@@ -209,7 +199,6 @@ python3 ai_image_generator.py              # 执行生成
 | tags | 文案末尾追加的标签列表 |
 
 **模板变量 template_variables**
-
 | 字段 | 说明 |
 | --- | --- |
 | product_name | 产品名称 |
@@ -220,7 +209,6 @@ python3 ai_image_generator.py              # 执行生成
 | features | 产品特点 |
 
 **核心逻辑**
-
 | 规则 | 说明 |
 | --- | --- |
 | 目录递归扫描 | source_dir 会递归扫描所有子文件夹中的图片 |
@@ -232,14 +220,12 @@ python3 ai_image_generator.py              # 执行生成
 | 并发执行 | 支持多组同时生成，通过 max_concurrent_groups 控制 |
 
 **specified_images 区别**
-
 | 配置 | 类型 | 说明 |
 | --- | --- | --- |
 | product_images.specified_images | 数组 | 每个元素是一张产品图路径，这些图会在每组中优先使用 |
 | reference_images.specified_images | 字符串 | 只能指定一张参考图路径，根据 coverage 决定多少组使用这张图 |
 
 **主体迁移模式示例**
-
 ```
 组1: 产品图A + 背景1, 产品图B + 背景1, 产品图C + 背景1  (同组共用背景1)
 组2: 产品图D + 背景2, 产品图E + 背景2, 产品图F + 背景2  (同组共用背景2)
