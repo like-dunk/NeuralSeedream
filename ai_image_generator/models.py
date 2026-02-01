@@ -33,6 +33,8 @@ class GlobalConfig:
     """全局配置"""
     # 图片生成服务选择
     image_service: str = "kieai"  # kieai 或 openrouter
+    # 存储服务选择
+    storage_service: str = "moss"  # moss 或 gcs
     
     # KieAI 配置
     api_key: str = ""
@@ -47,6 +49,12 @@ class GlobalConfig:
     moss_access_key_secret: str = ""
     moss_bucket_name: str = ""
     moss_expire_seconds: int = 86400
+    
+    # GCS (Google Cloud Storage) 配置
+    gcs_bucket_name: str = ""
+    gcs_folder_path: str = "ImageUpload"
+    gcs_credentials_path: str = ""  # 服务账号 JSON 文件路径
+    gcs_project_id: str = ""  # GCP 项目 ID
     
     # OpenRouter 图片生成配置
     openrouter_image_api_key: str = ""
@@ -129,7 +137,7 @@ class OutputConfig:
     resolution: str = "2K"
     format: str = "png"
     max_concurrent_groups: int = 10  # 最大并发组数
-    generate_text: bool = True  # 是否生成文案
+    save_inputs: bool = False  # 是否保存输入文件（产品图、参考图、prompt）
 
 
 @dataclass

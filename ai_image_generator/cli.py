@@ -5,14 +5,25 @@
 import argparse
 import json
 import logging
+import os
+import platform
+import shutil
+import subprocess
 import sys
+import warnings
 from pathlib import Path
 from typing import Optional, Union
+
+# 屏蔽 Python 版本相关的 FutureWarning（Google 库会警告 Python 3.9 已过期）
+warnings.filterwarnings("ignore", category=FutureWarning, module="google")
+warnings.filterwarnings("ignore", message=".*Python version.*")
+warnings.filterwarnings("ignore", message=".*end of life.*")
 
 from .api_client import APIClient
 from .config import ConfigManager
 from .engine import GenerationEngine
 from .exceptions import GeneratorError
+from .gcs_uploader import GCSUploader
 from .image_selector import ImageSelector
 from .moss_uploader import MOSSUploader
 from .openrouter_image_client import OpenRouterImageClient
@@ -21,6 +32,170 @@ from .seedream_client import SeedreamClient
 from .state_manager import StateManager
 from .template_engine import TemplateEngine
 from .text_generator import TextGenerator
+
+
+def check_gcs_dependencies() -> bool:
+    """
+    检查 GCS 相关依赖是否已安装
+    
+    Returns:
+        True 如果所有依赖都已安装
+    """
+    # 检查 google-cloud-storage Python 包
+    try:
+        import google.cloud.storage
+        return True
+    except ImportError:
+        return False
+
+
+def check_gcloud_auth() -> bool:
+    """
+    检查是否已通过 gcloud 登录
+    
+    Returns:
+        True 如果已登录
+    """
+    # 检查应用默认凭证文件是否存在
+    home = Path.home()
+    adc_path = home / ".config" / "gcloud" / "application_default_credentials.json"
+    
+    if adc_path.exists():
+        return True
+    
+    # Windows 路径
+    adc_path_win = home / "AppData" / "Roaming" / "gcloud" / "application_default_credentials.json"
+    if adc_path_win.exists():
+        return True
+    
+    return False
+
+
+def install_gcs_dependencies():
+    """安装 GCS 相关依赖"""
+    print("📦 正在安装 google-cloud-storage...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "google-cloud-storage"])
+        print("✅ google-cloud-storage 安装成功")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ 安装失败: {e}")
+        return False
+
+
+def install_gcloud_cli():
+    """安装 gcloud CLI"""
+    system = platform.system()
+    
+    if system == "Darwin":  # macOS
+        # 检查是否有 brew
+        if shutil.which("brew"):
+            print("📦 正在通过 Homebrew 安装 google-cloud-sdk...")
+            try:
+                subprocess.check_call(["brew", "install", "google-cloud-sdk"])
+                
+                # Homebrew 安装后需要添加 PATH
+                gcloud_bin = "/opt/homebrew/share/google-cloud-sdk/bin"
+                if os.path.exists(gcloud_bin):
+                    # 添加到当前进程的 PATH
+                    os.environ["PATH"] = f"{gcloud_bin}:{os.environ.get('PATH', '')}"
+                    
+                    # 添加到 shell 配置文件
+                    shell_rc = Path.home() / ".zshrc"
+                    if not shell_rc.exists():
+                        shell_rc = Path.home() / ".bashrc"
+                    
+                    export_line = f'export PATH="{gcloud_bin}:$PATH"'
+                    
+                    # 检查是否已添加
+                    if shell_rc.exists():
+                        content = shell_rc.read_text()
+                        if gcloud_bin not in content:
+                            with open(shell_rc, "a") as f:
+                                f.write(f"\n# Google Cloud SDK\n{export_line}\n")
+                            print(f"✅ 已添加 gcloud 到 PATH ({shell_rc.name})")
+                    
+                print("✅ google-cloud-sdk 安装成功")
+                return True
+            except subprocess.CalledProcessError:
+                pass
+        
+        print("❌ 请手动安装 gcloud CLI:")
+        print("   brew install google-cloud-sdk")
+        print("   或访问: https://cloud.google.com/sdk/docs/install")
+        return False
+    
+    elif system == "Linux":
+        print("❌ 请手动安装 gcloud CLI:")
+        print("   curl https://sdk.cloud.google.com | bash")
+        print("   或访问: https://cloud.google.com/sdk/docs/install")
+        return False
+    
+    elif system == "Windows":
+        print("❌ 请手动安装 gcloud CLI:")
+        print("   访问: https://cloud.google.com/sdk/docs/install")
+        return False
+    
+    return False
+
+
+def setup_gcs_auth():
+    """设置 GCS 认证"""
+    print("\n🔐 需要登录 Google Cloud 账号来访问 GCS")
+    print("   将打开浏览器进行登录...\n")
+    
+    try:
+        subprocess.check_call(["gcloud", "auth", "application-default", "login"])
+        print("\n✅ 登录成功！")
+        return True
+    except subprocess.CalledProcessError:
+        print("\n❌ 登录失败，请手动运行: gcloud auth application-default login")
+        return False
+    except FileNotFoundError:
+        print("\n❌ 未找到 gcloud 命令")
+        return False
+
+
+def ensure_gcs_ready(bucket_name: str) -> bool:
+    """
+    确保 GCS 环境已准备好
+    
+    Args:
+        bucket_name: GCS bucket 名称
+        
+    Returns:
+        True 如果环境已准备好
+    """
+    print(f"\n🔍 检查 GCS 环境 (bucket: {bucket_name})...")
+    
+    # 1. 检查 Python 包
+    if not check_gcs_dependencies():
+        print("⚠️  未安装 google-cloud-storage，正在自动安装...")
+        if not install_gcs_dependencies():
+            return False
+    
+    # 2. 检查 gcloud CLI
+    # 先检查 Homebrew 安装路径
+    gcloud_brew_path = "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
+    if os.path.exists(gcloud_brew_path):
+        # 添加到当前进程的 PATH
+        gcloud_bin = "/opt/homebrew/share/google-cloud-sdk/bin"
+        if gcloud_bin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{gcloud_bin}:{os.environ.get('PATH', '')}"
+    
+    if not shutil.which("gcloud"):
+        print("⚠️  未安装 gcloud CLI，正在自动安装...")
+        if not install_gcloud_cli():
+            return False
+    
+    # 3. 检查是否已登录
+    if not check_gcloud_auth():
+        print("⚠️  未登录 Google Cloud，正在打开登录页面...")
+        if not setup_gcs_auth():
+            return False
+    
+    print("✅ GCS 环境检查通过\n")
+    return True
 
 
 def setup_logging(level: str = "INFO", log_file: Optional[Path] = None):
@@ -79,17 +254,47 @@ def create_engine(
     # 图片选择器
     image_selector = ImageSelector()
     
-    # MOSS上传器
-    moss_uploader = MOSSUploader(
-        base_url=global_config.moss_base_url,
-        access_key_id=global_config.moss_access_key_id,
-        access_key_secret=global_config.moss_access_key_secret,
-        bucket_name=global_config.moss_bucket_name,
-        expire_seconds=global_config.moss_expire_seconds,
-    )
+    # 根据 storage_service 和 image_service 选择上传器
+    storage_service = global_config.storage_service
+    image_service = global_config.image_service
+    
+    # KieAI 必须使用 MOSS（KieAI API 需要直接访问 URL）
+    # OpenRouter 可以选择 MOSS 或 GCS
+    if image_service == "kieai":
+        # KieAI 强制使用 MOSS
+        if storage_service == "gcs":
+            logging.warning("⚠️ KieAI 服务不支持 GCS，自动切换到 MOSS")
+        uploader = MOSSUploader(
+            base_url=global_config.moss_base_url,
+            access_key_id=global_config.moss_access_key_id,
+            access_key_secret=global_config.moss_access_key_secret,
+            bucket_name=global_config.moss_bucket_name,
+            expire_seconds=global_config.moss_expire_seconds,
+        )
+    elif storage_service == "gcs" and global_config.gcs_bucket_name:
+        # OpenRouter + GCS
+        if not ensure_gcs_ready(global_config.gcs_bucket_name):
+            raise GeneratorError("GCS 环境未准备好，请按提示完成配置后重试")
+        
+        logging.info(f"📦 使用 Google Cloud Storage: {global_config.gcs_bucket_name}")
+        uploader = GCSUploader(
+            bucket_name=global_config.gcs_bucket_name,
+            folder_path=global_config.gcs_folder_path,
+            credentials_path=global_config.gcs_credentials_path or None,
+            project_id=global_config.gcs_project_id or None,
+            make_public=True,
+        )
+    else:
+        # OpenRouter + MOSS（默认）
+        uploader = MOSSUploader(
+            base_url=global_config.moss_base_url,
+            access_key_id=global_config.moss_access_key_id,
+            access_key_secret=global_config.moss_access_key_secret,
+            bucket_name=global_config.moss_bucket_name,
+            expire_seconds=global_config.moss_expire_seconds,
+        )
     
     # 根据配置选择图片生成服务
-    image_service = global_config.image_service
     image_model = template_config.image_model
     api_client: Union[APIClient, OpenRouterImageClient, SeedreamClient]
     
@@ -160,7 +365,7 @@ def create_engine(
         config_manager=config_manager,
         template_engine=template_engine,
         image_selector=image_selector,
-        moss_uploader=moss_uploader,
+        moss_uploader=uploader,  # 可以是 MOSSUploader 或 GCSUploader
         api_client=api_client,
         output_manager=output_manager,
         state_manager=state_manager,
