@@ -47,7 +47,6 @@
   },
   "text_generation": {
     "enabled": true,
-    "max_few_shot_examples": 5,
     "tags": ["品牌名", "护肤分享", "好物推荐"]
   },
   "template_variables": {
@@ -252,7 +251,6 @@ Midjourney 会生成 4 张图片，系统默认下载第一张。
 | 字段 | 说明 |
 | --- | --- |
 | enabled | 是否启用文案生成 |
-| max_few_shot_examples | few-shot 示例最多读取条数 |
 | tags | 文案末尾追加的标签列表 |
 
 **模板变量 template_variables**

@@ -145,9 +145,6 @@ class OutputConfig:
 class TextGenerationConfig:
     """文案生成配置"""
     enabled: bool = True
-    title_prompts_dir: Optional[str] = None  # 标题样本目录
-    content_prompts_dir: Optional[str] = None  # 文案样本目录
-    max_few_shot_examples: int = 5  # 最大 Few-shot 样本数
     tags: List[str] = field(default_factory=list)  # 用户自定义标签列表
 
 

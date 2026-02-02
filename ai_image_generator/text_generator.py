@@ -104,39 +104,10 @@ class TextGenerator:
 
         # 初始化 Jinja2 环境
         self._jinja_env: Optional[Environment] = None
-
-        # Few-shot 样本（可选，由 CLI 预加载）
-        self._few_shot_title_examples: List[str] = []
-        self._few_shot_content_examples: List[str] = []
     
     def is_enabled(self) -> bool:
         """检查服务是否启用"""
         return bool(self.api_key) and self.client is not None
-
-    def load_few_shot_examples(
-        self,
-        title_dir: Path,
-        content_dir: Path,
-        max_examples: int = 5,
-    ) -> None:
-        self._few_shot_title_examples = self._load_few_shot_dir(title_dir, max_examples)
-        self._few_shot_content_examples = self._load_few_shot_dir(content_dir, max_examples)
-
-    def _load_few_shot_dir(self, directory: Path, max_examples: int) -> List[str]:
-        if not directory or not directory.exists() or not directory.is_dir():
-            logger.warning(f"Few-shot 目录不存在或不可用: {directory}")
-            return []
-
-        files = sorted([p for p in directory.iterdir() if p.is_file()])
-        examples: List[str] = []
-        for p in files:
-            if len(examples) >= max_examples:
-                break
-            try:
-                examples.append(p.read_text(encoding="utf-8").strip())
-            except Exception as e:
-                logger.warning(f"读取 Few-shot 样本失败: {p}, {e}")
-        return [e for e in examples if e]
     
     def _get_jinja_env(self) -> Environment:
         """获取或创建 Jinja2 环境"""

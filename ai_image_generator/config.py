@@ -240,9 +240,6 @@ class ConfigManager:
         text_gen_cfg = data.get("text_generation", {})
         text_generation = TextGenerationConfig(
             enabled=text_gen_cfg.get("enabled", True),
-            title_prompts_dir=text_gen_cfg.get("title_prompts_dir"),
-            content_prompts_dir=text_gen_cfg.get("content_prompts_dir"),
-            max_few_shot_examples=text_gen_cfg.get("max_few_shot_examples", 5),
             tags=text_gen_cfg.get("tags", []),
         )
         
