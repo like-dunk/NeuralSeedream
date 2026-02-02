@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import threading
 import warnings
 from pathlib import Path
 from typing import List, Optional, Union
@@ -680,34 +681,62 @@ def main():
         
         all_results = []
         temp_files = []  # 记录临时文件，最后清理
+        results_lock = threading.Lock()  # 结果列表锁
+        
+        def execute_source_dir(idx: int, source_dir: str) -> dict:
+            """执行单个产品图文件夹的生成任务"""
+            folder_name = Path(source_dir).name
+            logger.info(f"\n{'='*60}")
+            logger.info(f"📦 [{idx}/{len(source_dirs)}] 开始处理: {folder_name}")
+            logger.info(f"{'='*60}\n")
+            
+            # 创建临时模板配置
+            temp_template = update_template_source_dir(template_path, source_dir)
+            with results_lock:
+                temp_files.append(temp_template)
+            
+            # 创建引擎
+            engine = create_engine(
+                config_path=config_path,
+                template_path=temp_template,
+                api_key=args.api_key,
+            )
+            
+            # 执行
+            result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
+            
+            logger.info(f"\n✅ [{idx}/{len(source_dirs)}] {folder_name} 完成")
+            
+            return {
+                "source_dir": source_dir,
+                "folder_name": folder_name,
+                "result": result.to_dict(),
+            }
         
         try:
-            for idx, source_dir in enumerate(source_dirs, 1):
-                folder_name = Path(source_dir).name
-                logger.info(f"\n{'='*60}")
-                logger.info(f"📦 [{idx}/{len(source_dirs)}] 开始处理: {folder_name}")
-                logger.info(f"{'='*60}\n")
+            # 并发执行所有文件夹
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(source_dirs)) as executor:
+                futures = {
+                    executor.submit(execute_source_dir, idx, source_dir): source_dir
+                    for idx, source_dir in enumerate(source_dirs, 1)
+                }
                 
-                # 创建临时模板配置
-                temp_template = update_template_source_dir(template_path, source_dir)
-                temp_files.append(temp_template)
-                
-                # 创建引擎
-                engine = create_engine(
-                    config_path=config_path,
-                    template_path=temp_template,
-                    api_key=args.api_key,
-                )
-                
-                # 执行
-                result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
-                all_results.append({
-                    "source_dir": source_dir,
-                    "folder_name": folder_name,
-                    "result": result.to_dict(),
-                })
-                
-                logger.info(f"\n✅ [{idx}/{len(source_dirs)}] {folder_name} 完成")
+                for future in concurrent.futures.as_completed(futures):
+                    source_dir = futures[future]
+                    try:
+                        result = future.result()
+                        with results_lock:
+                            all_results.append(result)
+                    except Exception as e:
+                        folder_name = Path(source_dir).name
+                        logger.error(f"❌ {folder_name} 执行失败: {e}")
+                        with results_lock:
+                            all_results.append({
+                                "source_dir": source_dir,
+                                "folder_name": folder_name,
+                                "result": {"error": str(e)},
+                            })
             
             # 输出汇总结果
             logger.info(f"\n{'='*60}")
