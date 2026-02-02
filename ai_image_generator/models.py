@@ -387,10 +387,11 @@ class RunResult:
     successful_images: int
     failed_images: int
     duration_seconds: float
+    excel_report_path: Optional[Path] = None  # Excel 统计报告路径
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为可序列化的字典"""
-        return {
+        result = {
             "run_dir": str(self.run_dir),
             "total_groups": self.total_groups,
             "completed_groups": self.completed_groups,
@@ -399,6 +400,9 @@ class RunResult:
             "failed_images": self.failed_images,
             "duration_seconds": self.duration_seconds,
         }
+        if self.excel_report_path:
+            result["excel_report_path"] = str(self.excel_report_path)
+        return result
 
 
 @dataclass

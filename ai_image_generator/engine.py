@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .api_client import APIClient
 from .config import ConfigManager
+from .excel_reporter import generate_excel_report
 from .exceptions import GeneratorError
 from .gcs_uploader import GCSUploader
 from .image_selector import ImageSelector
@@ -828,6 +829,12 @@ class GenerationEngine:
             # text_only 模式
             text_success = sum(1 for g in group_results if g.text_result and g.text_result.success)
             logger.info(f"🎉 文案生成完成: {text_success}/{len(group_results)} 篇成功, 耗时 {duration:.1f}秒")
+        
+        # 生成 Excel 统计报告（仅在有图片生成时）
+        if should_generate_images and successful_images > 0:
+            excel_path = generate_excel_report(run_dir)
+            if excel_path:
+                result.excel_report_path = excel_path
         
         return result
 

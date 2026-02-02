@@ -36,6 +36,57 @@ from .template_engine import TemplateEngine
 from .text_generator import TextGenerator
 
 
+def check_excel_dependencies() -> bool:
+    """
+    检查 Excel 报告相关依赖是否已安装
+    
+    Returns:
+        True 如果所有依赖都已安装
+    """
+    try:
+        import xlsxwriter
+        from PIL import Image
+        return True
+    except ImportError:
+        return False
+
+
+def install_excel_dependencies() -> bool:
+    """
+    安装 Excel 报告相关依赖
+    
+    Returns:
+        True 如果安装成功
+    """
+    print("📦 正在安装 Excel 报告依赖 (xlsxwriter, Pillow)...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "xlsxwriter", "Pillow"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("✅ Excel 报告依赖安装成功")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ 安装失败: {e}")
+        print("   请手动安装: pip install xlsxwriter Pillow")
+        return False
+
+
+def ensure_excel_dependencies() -> bool:
+    """
+    确保 Excel 报告依赖已安装，如果没有则自动安装
+    
+    Returns:
+        True 如果依赖已就绪
+    """
+    if check_excel_dependencies():
+        return True
+    
+    print("⚠️  未安装 Excel 报告依赖，正在自动安装...")
+    return install_excel_dependencies()
+
+
 def check_gcs_dependencies() -> bool:
     """
     检查 GCS 相关依赖是否已安装
@@ -527,6 +578,9 @@ def update_template_source_dir(template_path: Path, new_source_dir: str) -> Path
 
 def main():
     """主入口"""
+    # 检查并安装 Excel 报告依赖
+    ensure_excel_dependencies()
+    
     parser = argparse.ArgumentParser(
         description="AI图片生成器 - 批量生成产品场景图",
         formatter_class=argparse.RawDescriptionHelpFormatter,
