@@ -12,17 +12,20 @@ logger = logging.getLogger(__name__)
 def generate_excel_report(
     run_dir: Path,
     output_filename: Optional[str] = None,
+    target_width: int = 120,
     target_height: int = 150,
-    padding: int = 10,
+    padding: int = 5,
 ) -> Optional[Path]:
     """
     为运行目录生成 Excel 统计报告
     
     每一行代表一个组（文件夹），展示该组生成的所有图片
+    所有图片统一缩放到相同的目标尺寸
     
     Args:
         run_dir: 运行目录路径（包含 001, 002 等组目录）
         output_filename: 输出文件名（默认为 output_smart.xlsx）
+        target_width: 图片目标宽度（像素）
         target_height: 图片目标高度（像素）
         padding: 图片边距
         
@@ -65,13 +68,19 @@ def generate_excel_report(
         # 写入表头
         headers = ["组号", "图片展示"]
         worksheet.write(0, 0, headers[0], header_format)
-        worksheet.write(0, 1, headers[1], header_format)
         
         # 设置第一列宽度
-        worksheet.set_column(0, 0, 10)
+        worksheet.set_column(0, 0, 15)
         
-        # 设置所有行的默认高度
+        # 设置表头行高度（正常高度）
+        worksheet.set_row(0, 20)
+        
+        # 设置数据行的默认高度（图片高度 + 边距）
         worksheet.set_default_row(target_height + padding)
+        
+        # 计算统一的列宽（基于目标宽度）
+        # Excel 宽度单位约 7 像素
+        uniform_col_width = (target_width + padding) / 7
         
         # 获取所有组目录（001, 002, ...）
         group_dirs = []
@@ -91,7 +100,7 @@ def generate_excel_report(
                 pass
             return None
         
-        # 先遍历一遍，计算最大图片数量（用于合并表头）
+        # 先遍历一遍，计算最大图片数量（用于合并表头和设置列宽）
         max_images_count = 0
         for group_dir in group_dirs:
             images_count = 0
@@ -103,14 +112,16 @@ def generate_excel_report(
                         images_count += 1
             max_images_count = max(max_images_count, images_count)
         
+        # 设置所有图片列的统一宽度
+        for col in range(1, max_images_count + 1):
+            worksheet.set_column(col, col, uniform_col_width)
+        
         # 合并"图片展示"表头（从第2列到最后一列）
         if max_images_count > 1:
             worksheet.merge_range(0, 1, 0, max_images_count, headers[1], header_format)
         else:
             worksheet.write(0, 1, headers[1], header_format)
         
-        # 用于记录每一列需要的最大宽度
-        col_max_widths = {}
         current_row = 1
         
         for group_dir in group_dirs:
@@ -136,23 +147,25 @@ def generate_excel_report(
                     with Image.open(image_file) as img:
                         orig_w, orig_h = img.size
                     
-                    # 计算缩放比例
-                    scale_factor = target_height / orig_h
+                    # 计算缩放比例（fit 模式：保持宽高比，适应目标尺寸）
+                    scale_w = target_width / orig_w
+                    scale_h = target_height / orig_h
+                    scale_factor = min(scale_w, scale_h)  # 取较小值确保图片完全在目标区域内
                     
-                    # 计算缩放后的宽度
-                    scaled_width = orig_w * scale_factor
+                    # 计算缩放后的实际尺寸
+                    scaled_w = orig_w * scale_factor
+                    scaled_h = orig_h * scale_factor
                     
-                    # 更新列宽（Excel 宽度单位约 7 像素）
-                    excel_col_width = (scaled_width + padding) / 7
-                    
-                    if current_col not in col_max_widths or excel_col_width > col_max_widths[current_col]:
-                        col_max_widths[current_col] = excel_col_width
-                        worksheet.set_column(current_col, current_col, excel_col_width)
+                    # 计算偏移量使图片在单元格中居中
+                    x_offset = (target_width - scaled_w) / 2
+                    y_offset = (target_height - scaled_h) / 2
                     
                     # 插入图片
                     worksheet.insert_image(current_row, current_col, str(image_file), {
                         'x_scale': scale_factor,
                         'y_scale': scale_factor,
+                        'x_offset': x_offset,
+                        'y_offset': y_offset,
                         'object_position': 1
                     })
                     
