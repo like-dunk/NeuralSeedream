@@ -400,6 +400,23 @@ def create_engine(
     )
 
 
+def validate_source_dirs_exist(source_dirs: List[str]) -> List[str]:
+    """
+    验证所有产品图文件夹路径都存在
+    
+    Args:
+        source_dirs: 产品图文件夹路径列表
+        
+    Returns:
+        不存在的路径列表（空列表表示全部存在）
+    """
+    not_found = []
+    for source_dir in source_dirs:
+        if not Path(source_dir).exists():
+            not_found.append(source_dir)
+    return not_found
+
+
 def validate_specified_images_coverage(source_dirs: List[str], specified_images: List[str]) -> List[str]:
     """
     验证所有指定的产品图都能匹配到至少一个 source_dir
@@ -664,6 +681,14 @@ def main():
             logger.info(f"   {i}. {d}")
         print()
         
+        # 验证所有 source_dir 路径都存在
+        not_found_dirs = validate_source_dirs_exist(source_dirs)
+        if not_found_dirs:
+            logger.error("❌ 以下产品图文件夹路径不存在:")
+            for d in not_found_dirs:
+                logger.error(f"   - {d}")
+            raise GeneratorError(f"产品图文件夹不存在: {', '.join(not_found_dirs)}")
+        
         # 验证 specified_images 都能匹配到 source_dir
         with open(template_path, "r", encoding="utf-8") as f:
             template_data = json.load(f)
@@ -743,11 +768,11 @@ def main():
             logger.info(f"🎉 全部完成！共处理 {len(source_dirs)} 个产品图文件夹")
             logger.info(f"{'='*60}\n")
             
-            # 汇总统计
-            total_images = sum(r["result"]["total_images"] for r in all_results)
-            successful_images = sum(r["result"]["successful_images"] for r in all_results)
-            failed_images = sum(r["result"]["failed_images"] for r in all_results)
-            total_duration = sum(r["result"]["duration_seconds"] for r in all_results)
+            # 汇总统计（安全获取，处理失败的结果可能没有这些字段）
+            total_images = sum(r["result"].get("total_images", 0) for r in all_results)
+            successful_images = sum(r["result"].get("successful_images", 0) for r in all_results)
+            failed_images = sum(r["result"].get("failed_images", 0) for r in all_results)
+            total_duration = sum(r["result"].get("duration_seconds", 0) for r in all_results)
             
             summary = {
                 "total_source_dirs": len(source_dirs),
