@@ -25,6 +25,7 @@ from .engine import GenerationEngine
 from .exceptions import GeneratorError
 from .gcs_uploader import GCSUploader
 from .image_selector import ImageSelector
+from .midjourney_client import MidjourneyClient
 from .moss_uploader import MOSSUploader
 from .openrouter_image_client import OpenRouterImageClient
 from .output_manager import OutputManager
@@ -254,24 +255,22 @@ def create_engine(
     # 图片选择器
     image_selector = ImageSelector()
     
-    # 根据 storage_service 和 image_service 选择上传器
-    storage_service = global_config.storage_service
-    image_service = global_config.image_service
+    # 根据 image_model 判断是否使用 OpenRouter
+    image_model = template_config.image_model
+    is_openrouter = image_model.startswith("openrouter/")
     
-    # KieAI 必须使用 MOSS（KieAI API 需要直接访问 URL）
-    # OpenRouter 可以选择 MOSS 或 GCS
-    if image_service == "kieai":
-        # KieAI 强制使用 MOSS
-        if storage_service == "gcs":
-            logging.warning("⚠️ KieAI 服务不支持 GCS，自动切换到 MOSS")
-        uploader = MOSSUploader(
-            base_url=global_config.moss_base_url,
-            access_key_id=global_config.moss_access_key_id,
-            access_key_secret=global_config.moss_access_key_secret,
-            bucket_name=global_config.moss_bucket_name,
-            expire_seconds=global_config.moss_expire_seconds,
-        )
-    elif storage_service == "gcs" and global_config.gcs_bucket_name:
+    # 警告：Midjourney 不适合主体迁移任务
+    if image_model == "midjourney" and template_config.mode == "subject_transfer":
+        logging.warning("⚠️ Midjourney 不适合主体迁移任务！")
+        logging.warning("   Midjourney 的 image-to-image 是风格融合，无法精确保留产品主体。")
+        logging.warning("   建议使用 nano-banana-pro 或 seedream/4.5-edit 进行主体迁移。")
+    
+    # 根据 storage_service 和 image_model 选择上传器
+    # KieAI 模型必须使用 MOSS（KieAI API 需要直接访问 URL）
+    # OpenRouter 模型可以选择 MOSS 或 GCS
+    storage_service = global_config.storage_service
+    
+    if is_openrouter and storage_service == "gcs" and global_config.gcs_bucket_name:
         # OpenRouter + GCS
         if not ensure_gcs_ready(global_config.gcs_bucket_name):
             raise GeneratorError("GCS 环境未准备好，请按提示完成配置后重试")
@@ -285,7 +284,9 @@ def create_engine(
             make_public=True,
         )
     else:
-        # OpenRouter + MOSS（默认）
+        # KieAI 或 OpenRouter + MOSS
+        if not is_openrouter and storage_service == "gcs":
+            logging.warning("⚠️ KieAI 模型不支持 GCS 存储，自动切换到 MOSS")
         uploader = MOSSUploader(
             base_url=global_config.moss_base_url,
             access_key_id=global_config.moss_access_key_id,
@@ -294,29 +295,54 @@ def create_engine(
             expire_seconds=global_config.moss_expire_seconds,
         )
     
-    # 根据配置选择图片生成服务
-    image_model = template_config.image_model
-    api_client: Union[APIClient, OpenRouterImageClient, SeedreamClient]
+    # 根据 image_model 选择图片生成客户端
+    # 所有生图模型统一在 templates/generation_template.json 的 image_model 字段配置
+    api_client: Union[APIClient, OpenRouterImageClient, SeedreamClient, MidjourneyClient]
     
-    if image_service == "openrouter":
-        logging.info(f"📡 使用 OpenRouter 图片生成服务, model={global_config.openrouter_image_model}")
+    if image_model == "openrouter/seedream-4.5":
+        # OpenRouter Seedream 4.5
+        logging.info(f"📡 使用 OpenRouter Seedream 4.5 图片生成服务")
         if global_config.openrouter_image_proxy:
             logging.info(f"📡 使用代理: {global_config.openrouter_image_proxy.split('@')[-1]}")
         api_client = OpenRouterImageClient(
             api_key=global_config.openrouter_image_api_key,
             base_url=global_config.openrouter_image_base_url,
-            model=global_config.openrouter_image_model,
+            model="bytedance-seed/seedream-4.5",
+            site_url=global_config.openrouter_image_site_url,
+            site_name=global_config.openrouter_image_site_name,
+            proxy=global_config.openrouter_image_proxy or None,
+        )
+    elif image_model == "openrouter/nano-banana-pro":
+        # OpenRouter Nano Banana Pro (google/gemini-3-pro-image-preview)
+        logging.info(f"📡 使用 OpenRouter Nano Banana Pro 图片生成服务")
+        if global_config.openrouter_image_proxy:
+            logging.info(f"📡 使用代理: {global_config.openrouter_image_proxy.split('@')[-1]}")
+        api_client = OpenRouterImageClient(
+            api_key=global_config.openrouter_image_api_key,
+            base_url=global_config.openrouter_image_base_url,
+            model="google/gemini-3-pro-image-preview",
             site_url=global_config.openrouter_image_site_url,
             site_name=global_config.openrouter_image_site_name,
             proxy=global_config.openrouter_image_proxy or None,
         )
     elif image_model == "seedream/4.5-edit":
-        # 使用 Seedream 4.5 Edit 模型
+        # KieAI Seedream 4.5 Edit
         logging.info(f"📡 使用 KieAI Seedream 4.5 Edit 图片生成服务")
         api_client = SeedreamClient(
             api_key=global_config.api_key,
             base_url=global_config.api_base_url,
             model="seedream/4.5-edit",
+            poll_interval=global_config.poll_interval,
+            max_wait=global_config.max_wait,
+        )
+    elif image_model == "midjourney":
+        # KieAI Midjourney image-to-image
+        logging.info(f"📡 使用 KieAI Midjourney 图片生成服务")
+        api_client = MidjourneyClient(
+            api_key=global_config.api_key,
+            base_url=global_config.api_base_url,
+            version=global_config.midjourney_version,
+            speed=global_config.midjourney_speed,
             poll_interval=global_config.poll_interval,
             max_wait=global_config.max_wait,
         )
@@ -380,18 +406,26 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 场景生成
+  # 新运行（使用默认模板）
+  python -m ai_image_generator
+  
+  # 指定模板运行
   python -m ai_image_generator -t templates/scene_generation_template.json
   
-  # 主体迁移
-  python -m ai_image_generator -t templates/subject_transfer_template.json
-  
   # 验证配置
-  python -m ai_image_generator -t templates/xxx.json --dry-run
+  python -m ai_image_generator --dry-run
   
-  # 断点续传
-  python -m ai_image_generator -t templates/xxx.json --resume outputs/xxx_20260126_143000
+  # 断点续传（直接传入之前的运行目录）
+  python -m ai_image_generator outputs/海洋至尊_20260126_143000
         """,
+    )
+    
+    # 位置参数：断点续传目录（可选）
+    parser.add_argument(
+        "resume_dir",
+        nargs="?",
+        default=None,
+        help="断点续传：指定之前的运行目录路径",
     )
     
     parser.add_argument(
@@ -424,11 +458,6 @@ def main():
     )
     
     parser.add_argument(
-        "--resume",
-        help="断点续传，指定之前的运行目录",
-    )
-    
-    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -443,19 +472,70 @@ def main():
     
     try:
         config_path = Path(args.config)
-        template_path = Path(args.template)
         
-        # 创建引擎
-        engine = create_engine(
-            config_path=config_path,
-            template_path=template_path,
-            api_key=args.api_key,
-        )
-        
-        # 执行
-        if args.resume:
-            result = engine.resume(Path(args.resume), auto_confirm=args.yes)
+        # 判断是否为断点续传模式
+        if args.resume_dir:
+            # 断点续传模式
+            resume_path = Path(args.resume_dir)
+            
+            # 检查目录是否存在
+            if not resume_path.exists():
+                logger.error(f"目录不存在: {resume_path}")
+                return 1
+            
+            if not resume_path.is_dir():
+                logger.error(f"路径不是目录: {resume_path}")
+                return 1
+            
+            # 检查是否有 results.json
+            results_file = resume_path / "results.json"
+            if not results_file.exists():
+                logger.error(f"该目录不是有效的运行目录（缺少 results.json）: {resume_path}")
+                return 1
+            
+            # 加载状态获取模板配置路径
+            state_manager = StateManager(state_dir=resume_path)
+            state = state_manager.load_state()
+            
+            if not state:
+                logger.error("状态文件损坏，无法恢复")
+                return 1
+            
+            # 从状态中获取模板配置路径
+            template_path = Path(state.template_config_path)
+            if not template_path.exists():
+                logger.error(f"模板配置文件不存在: {template_path}")
+                return 1
+            
+            logger.info(f"🔄 断点续传模式: {resume_path}")
+            logger.info(f"   使用模板: {template_path}")
+            
+            # 创建引擎
+            engine = create_engine(
+                config_path=config_path,
+                template_path=template_path,
+                api_key=args.api_key,
+            )
+            
+            # 设置输出目录为恢复目录
+            engine.output_manager.set_run_dir(resume_path)
+            engine.state_manager.state_dir = resume_path
+            engine.state_manager._state = state
+            
+            # 执行（会自动跳过已完成的组）
+            result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
         else:
+            # 新运行模式
+            template_path = Path(args.template)
+            
+            # 创建引擎
+            engine = create_engine(
+                config_path=config_path,
+                template_path=template_path,
+                api_key=args.api_key,
+            )
+            
+            # 执行
             result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
         
         # 输出结果

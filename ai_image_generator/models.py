@@ -31,8 +31,6 @@ class ImageServiceProvider(Enum):
 @dataclass
 class GlobalConfig:
     """全局配置"""
-    # 图片生成服务选择
-    image_service: str = "kieai"  # kieai 或 openrouter
     # 存储服务选择
     storage_service: str = "moss"  # moss 或 gcs
     
@@ -42,6 +40,10 @@ class GlobalConfig:
     model: str = "nano-banana-pro"
     poll_interval: float = 2.0
     max_wait: float = 1500.0
+    
+    # KieAI Midjourney 配置
+    midjourney_version: str = "7"  # 7, 6.1, 6, 5.2, 5.1, niji6, niji7
+    midjourney_speed: str = "fast"  # relaxed, fast, turbo
     
     # MOSS 配置
     moss_base_url: str = ""
@@ -56,10 +58,9 @@ class GlobalConfig:
     gcs_credentials_path: str = ""  # 服务账号 JSON 文件路径
     gcs_project_id: str = ""  # GCP 项目 ID
     
-    # OpenRouter 图片生成配置
+    # OpenRouter 图片生成配置（用于 openrouter/* 模型）
     openrouter_image_api_key: str = ""
     openrouter_image_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_image_model: str = "google/gemini-3-pro-image-preview"
     openrouter_image_site_url: str = ""
     openrouter_image_site_name: str = ""
     openrouter_image_proxy: str = ""  # 代理地址
@@ -161,6 +162,7 @@ class ImageModel(Enum):
     """图片生成模型"""
     NANO_BANANA_PRO = "nano-banana-pro"
     SEEDREAM_EDIT = "seedream/4.5-edit"
+    MIDJOURNEY = "midjourney"  # KieAI Midjourney image-to-image
 
 
 @dataclass

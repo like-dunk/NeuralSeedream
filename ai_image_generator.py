@@ -3,17 +3,17 @@
 AI图片生成器 - 主入口脚本
 
 使用方法:
-    # 场景生成
+    # 新运行（使用默认模板）
+    python ai_image_generator.py
+    
+    # 指定模板运行
     python ai_image_generator.py -t templates/scene_generation_template.json
     
-    # 主体迁移
-    python ai_image_generator.py -t templates/subject_transfer_template.json
-    
     # 验证配置
-    python ai_image_generator.py -t templates/xxx.json --dry-run
+    python ai_image_generator.py --dry-run
     
-    # 断点续传
-    python ai_image_generator.py -t templates/xxx.json --resume outputs/xxx_20260126_143000
+    # 断点续传（直接传入之前的运行目录）
+    python ai_image_generator.py outputs/海洋至尊_20260126_143000
 """
 
 import subprocess

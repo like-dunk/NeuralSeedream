@@ -81,12 +81,13 @@ class ConfigManager:
         # 从环境变量或配置文件获取值
         kieai_cfg = data.get("kieai", {})
         moss_cfg = data.get("moss", {})
+        gcs_cfg = data.get("gcs", {})
         openrouter_cfg = data.get("openrouter", {})
         openrouter_image_cfg = data.get("openrouter_image", {})
         text_gen_cfg = data.get("text_generator", {})
         
-        # 图片生成服务选择（默认 kieai）
-        image_service = data.get("image_service", "kieai")
+        # 存储服务选择（默认 moss）
+        storage_service = data.get("storage_service", "moss")
         
         # KieAI 配置
         kieai_api_key = os.getenv("KIEAI_API_KEY") or kieai_cfg.get("api_key", "")
@@ -98,41 +99,36 @@ class ConfigManager:
             os.getenv("OPENROUTER_API_KEY") or 
             openrouter_cfg.get("api_key", "")
         )
-        openrouter_image_model = (
-            openrouter_image_cfg.get("model") or 
-            "google/gemini-3-pro-image-preview"
-        )
-        
-        # 验证：根据选择的服务检查必需的配置
-        if image_service == "kieai" and not kieai_api_key:
-            raise ConfigurationError("使用 KieAI 服务需要配置 kieai.api_key", field="kieai.api_key")
-        if image_service == "openrouter":
-            if not openrouter_image_api_key:
-                raise ConfigurationError("使用 OpenRouter 服务需要配置 openrouter.api_key", field="openrouter.api_key")
-            # proxy 为可选配置，允许为空（直连）
         
         self._global_config = GlobalConfig(
             # 服务选择
-            image_service=image_service,
+            storage_service=storage_service,
             # KieAI 配置
             api_key=kieai_api_key,
             api_base_url=kieai_cfg.get("base_url", "https://api.kie.ai/api/v1"),
             model=kieai_cfg.get("model", "nano-banana-pro"),
             poll_interval=float(kieai_cfg.get("poll_interval", 2.0)),
             max_wait=float(kieai_cfg.get("max_wait_seconds", 1500.0)),
+            # KieAI Midjourney 配置
+            midjourney_version=kieai_cfg.get("midjourney_version", "7"),
+            midjourney_speed=kieai_cfg.get("midjourney_speed", "fast"),
             # MOSS 配置
             moss_base_url=os.getenv("MOSS_BASE_URL") or moss_cfg.get("base_url", ""),
             moss_access_key_id=os.getenv("MOSS_ACCESS_KEY_ID") or moss_cfg.get("access_key_id", ""),
             moss_access_key_secret=os.getenv("MOSS_ACCESS_KEY_SECRET") or moss_cfg.get("access_key_secret", ""),
             moss_bucket_name=os.getenv("MOSS_BUCKET_NAME") or moss_cfg.get("bucket_name", ""),
             moss_expire_seconds=int(moss_cfg.get("expire_seconds", 86400)),
+            # GCS 配置
+            gcs_bucket_name=os.getenv("GCS_BUCKET_NAME") or gcs_cfg.get("bucket_name", ""),
+            gcs_folder_path=gcs_cfg.get("folder_path", "ImageUpload"),
+            gcs_credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or gcs_cfg.get("credentials_path", ""),
+            gcs_project_id=os.getenv("GOOGLE_CLOUD_PROJECT") or gcs_cfg.get("project_id", ""),
             # OpenRouter 图片生成配置
             openrouter_image_api_key=openrouter_image_api_key,
             openrouter_image_base_url=(
                 openrouter_image_cfg.get("base_url") or 
                 openrouter_cfg.get("base_url", "https://openrouter.ai/api/v1")
             ),
-            openrouter_image_model=openrouter_image_model,
             openrouter_image_site_url=(
                 openrouter_image_cfg.get("site_url") or 
                 os.getenv("OPENROUTER_SITE_URL") or 
@@ -237,7 +233,7 @@ class ConfigManager:
             resolution=output_cfg.get("resolution", "2K"),
             format=output_cfg.get("format", "png"),
             max_concurrent_groups=output_cfg.get("max_concurrent_groups", 10),
-            generate_text=output_cfg.get("generate_text", True),
+            save_inputs=output_cfg.get("save_inputs", False),
         )
         
         # 解析文案生成配置

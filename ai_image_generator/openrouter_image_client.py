@@ -1,7 +1,7 @@
 """
 OpenRouter 图片生成客户端 - 使用 OpenAI 兼容接口
 
-参考文档: https://openrouter.ai/google/gemini-3-pro-image-preview
+支持模型: google/gemini-3-pro-image-preview (nano-banana-pro), bytedance-seed/seedream-4.5
 """
 
 import base64
@@ -172,10 +172,19 @@ class OpenRouterImageClient:
         """
         从响应消息字典中提取图片 URL
         
-        响应格式:
+        支持多种响应格式:
+        
+        1. Gemini 格式:
         {
             "images": [{
                 "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,..." }
+            }]
+        }
+        
+        2. Seedream 4.5 格式:
+        {
+            "images": [{
                 "image_url": { "url": "data:image/png;base64,..." }
             }]
         }
@@ -190,11 +199,14 @@ class OpenRouterImageClient:
         images = message.get("images")
         if images:
             for image in images:
-                # image["image_url"]["url"]
+                # Gemini/Seedream: image["image_url"]["url"]
                 image_url = image.get("image_url", {})
                 url = image_url.get("url") if isinstance(image_url, dict) else None
                 if url:
                     return url
+                # 备用: 直接是 URL 字符串
+                if isinstance(image, str) and image.startswith("data:"):
+                    return image
         
         # 方式2: 检查 content 是否包含图片
         content = message.get("content")
@@ -229,17 +241,25 @@ class OpenRouterImageClient:
         """
         content = []
         
-        # 添加输入图片（作为参考）- 转换为 base64 data URL
-        # OpenRouter/Google 无法直接访问阿里云 OSS URL，需要转换
+        # 添加输入图片（作为参考）
         for url in image_urls:
-            data_url = self._url_to_base64_data_url(url)
-            if data_url:
+            # GCS 公开 URL 可以直接使用，其他 URL 需要转换为 base64
+            if url.startswith("https://storage.googleapis.com/"):
+                # GCS 公开 URL，直接使用
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": data_url},
+                    "image_url": {"url": url},
                 })
             else:
-                logger.warning(f"无法转换图片 URL: {url}")
+                # 其他 URL（如阿里云 OSS），需要下载并转换为 base64
+                data_url = self._url_to_base64_data_url(url)
+                if data_url:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    })
+                else:
+                    logger.warning(f"无法转换图片 URL: {url}")
         
         # 构建增强的提示词
         enhanced_prompt = prompt

@@ -85,8 +85,17 @@ python3 ai_image_generator.py              # 执行生成
 | -c, --config | 全局配置文件路径，默认 config.json |
 | --dry-run | 验证配置，不执行生成 |
 | -y, --yes | 跳过确认提示 |
-| --resume | 断点续传，指定之前的输出目录 |
 | --log-level | 日志级别 DEBUG / INFO / WARNING / ERROR |
+
+**断点续传**
+
+如果生成过程中断，可以直接传入之前的输出目录来恢复：
+
+```bash
+python3 ai_image_generator.py outputs/任务名_20260126_143000
+```
+
+系统会自动跳过已完成的组，继续执行未完成的任务。
 
 **目录结构**
 
@@ -129,21 +138,69 @@ python3 ai_image_generator.py              # 执行生成
 | images_per_group | 每组生成多少张，固定值 4 或范围 [min, max] |
 
 **image_model 图片生成模型**
+
+所有生图模型统一在模板配置的 `image_model` 字段配置。通过前缀区分服务商：
+
+**KieAI 模型**（无前缀）：
 | 值 | 说明 |
 | --- | --- |
-| nano-banana-pro | KieAI Nano Banana Pro 模型（默认），支持多图输入，适合主体迁移 |
-| seedream/4.5-edit | KieAI Seedream 4.5 Edit 模型，图片编辑模型，适合风格转换 |
+| nano-banana-pro | Nano Banana Pro 模型（默认），支持多图输入 |
+| seedream/4.5-edit | Seedream 4.5 Edit 模型，图片编辑 |
+| midjourney | Midjourney image-to-image，高质量艺术风格 |
 
-配置示例：
+**OpenRouter 模型**（`openrouter/` 前缀）：
+| 值 | 说明 |
+| --- | --- |
+| openrouter/seedream-4.5 | 字节跳动 Seedream 4.5 |
+| openrouter/gemini | Google Gemini 图片生成 |
+
+切换示例：
+```json
+// 使用 KieAI Midjourney
+{ "image_model": "midjourney" }
+
+// 使用 OpenRouter Seedream 4.5
+{ "image_model": "openrouter/seedream-4.5" }
+```
+
+**存储服务限制**：
+- KieAI 模型必须使用 MOSS 存储（`storage_service: "moss"`）
+- OpenRouter 模型可以使用 MOSS 或 GCS 存储
+
+注意事项：
+- KieAI 模型需要在 `config.json` 中配置 `kieai.api_key`
+- OpenRouter 模型需要在 `config.json` 中配置 `openrouter_image.api_key`
+- `nano-banana-pro`：支持宽高比 `4:5`、分辨率 `1K/2K`、输出格式 `png/jpg`
+- `seedream/4.5-edit`：支持宽高比 `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9`，不支持 `4:5`（会自动转换为 `3:4`）
+- `midjourney`：支持宽高比 `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:3`, `3:2`, `4:5`, `5:4`, `21:9`, `9:21`
+
+**Midjourney 配置**
+
+在 `config.json` 中配置 Midjourney 参数：
+
 ```json
 {
-  "image_model": "seedream/4.5-edit"
+  "kieai": {
+    "api_key": "your_kieai_api_key",
+    "midjourney_version": "7",
+    "midjourney_speed": "fast"
+  }
 }
 ```
 
-注意事项：
-- `nano-banana-pro`：支持宽高比 `4:5`、分辨率 `1K/2K`、输出格式 `png/jpg`
-- `seedream/4.5-edit`：支持宽高比 `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9`，不支持 `4:5`（会自动转换为 `3:4` 并提示确认）
+| 参数 | 说明 |
+| --- | --- |
+| midjourney_version | Midjourney 版本：7, 6.1, 6, 5.2, 5.1, niji6, niji7 |
+| midjourney_speed | 生成速度：relaxed（慢但便宜）, fast（快速，默认）, turbo（最快） |
+
+Midjourney API 参数说明：
+| 参数 | 范围 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| stylization | 0-1000 | 100 | 风格化程度，值越高风格越强 |
+| weirdness | 0-3000 | 0 | 怪异程度，值越高越奇特 |
+| variety | 0-100 | 0 | 多样性，值越高结果差异越大 |
+
+Midjourney 会生成 4 张图片，系统默认下载第一张。
 
 **generation_target 生成目标**
 用于单独测试图片生成或文案生成功能：
@@ -239,7 +296,7 @@ python3 ai_image_generator.py              # 执行生成
 | python3 ai_image_generator.py --dry-run | 验证配置 |
 | python3 ai_image_generator.py -t templates/scene_generation_template.json -y | 场景生成 |
 | python3 ai_image_generator.py -t templates/subject_transfer_template.json -y | 主体迁移 |
-| python3 ai_image_generator.py --resume outputs/xxx_20260126_143000 | 断点续传 |
+| python3 ai_image_generator.py outputs/xxx_20260126_143000 | 断点续传 |
 | python3 ai_image_generator.py --log-level DEBUG | 调试模式 |
 
 **文案生成配置**

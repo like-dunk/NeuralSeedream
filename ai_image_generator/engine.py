@@ -9,11 +9,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .api_client import APIClient
 from .config import ConfigManager
 from .exceptions import GeneratorError
+from .gcs_uploader import GCSUploader
 from .image_selector import ImageSelector
 from .models import (
     GenerationLog,
@@ -30,6 +31,9 @@ from .output_manager import OutputManager
 from .state_manager import StateManager
 from .template_engine import TemplateEngine
 from .text_generator import TextGenerator
+
+# 上传器类型（MOSS 或 GCS）
+UploaderType = Union[MOSSUploader, GCSUploader]
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +86,7 @@ class GenerationEngine:
         config_manager: ConfigManager,
         template_engine: TemplateEngine,
         image_selector: ImageSelector,
-        moss_uploader: MOSSUploader,
+        moss_uploader: UploaderType,  # 可以是 MOSSUploader 或 GCSUploader
         api_client: APIClient,
         output_manager: OutputManager,
         state_manager: StateManager,
@@ -137,14 +141,25 @@ class GenerationEngine:
         self._global_config = self.config_manager.load_global_config()
         self._template_config = self.config_manager.load_template_config()
         
-        # OpenRouter 不需要速率限制
-        if self._global_config.image_service == "openrouter":
+        # OpenRouter 模型不需要速率限制（根据 image_model 判断）
+        image_model = getattr(self._template_config, 'image_model', '') or ''
+        if image_model.startswith("openrouter/"):
             self._use_rate_limiter = False
     
-    def _get_moss_folder(self) -> str:
-        """获取MOSS上传文件夹路径"""
+    def _get_upload_folder(self) -> str:
+        """获取上传文件夹路径"""
         name = self._template_config.name if self._template_config else "default"
-        return f"/ai_image_generator/{name}/"
+        
+        # GCS 使用 config 中配置的 folder_path 作为基础路径
+        # MOSS 使用固定的 /ai_image_generator/ 前缀
+        # 根据 storage_service 判断使用哪个存储服务
+        if self._global_config.storage_service == "gcs" and self._global_config.gcs_bucket_name:
+            # GCS: 使用配置的 folder_path + 模板名称
+            base_folder = self._global_config.gcs_folder_path or "AI-ImageGene"
+            return f"{base_folder}/{name}"
+        else:
+            # MOSS: 保持原有路径
+            return f"/ai_image_generator/{name}/"
     
     def _upload_images(self, paths: List[Path]) -> List[str]:
         """
@@ -157,7 +172,7 @@ class GenerationEngine:
             URL列表
         """
         urls = []
-        folder = self._get_moss_folder()
+        folder = self._get_upload_folder()
         
         for path in paths:
             key = str(path.resolve())
@@ -251,12 +266,16 @@ class GenerationEngine:
         # 获取指定的 prompts
         specified = []
         if template_cfg.scene_prompts and template_cfg.scene_prompts.specified_prompts:
+            available_ids = [p.id for p in prompts] if prompts else []
             for prompt_id in template_cfg.scene_prompts.specified_prompts:
                 found = self.image_selector.find_prompt_by_id(prompts, prompt_id)
                 if found:
                     specified.append(found)
                 else:
-                    logger.warning(f"⚠️ 指定的 prompt 未找到: {prompt_id}")
+                    raise GeneratorError(
+                        f"指定的 prompt 未找到: '{prompt_id}'。"
+                        f"可用的 prompt id: {available_ids}"
+                    )
 
         # 分配 prompts
         for i in range(group_count):
@@ -314,9 +333,14 @@ class GenerationEngine:
             prompt_id = template_cfg.transfer_prompts.specified_prompt
             selected = self.image_selector.find_prompt_by_id(prompts, prompt_id)
             if not selected:
-                logger.warning(f"⚠️ 指定的 prompt 未找到: {prompt_id}，将随机选择")
+                # 列出可用的 prompt id 帮助用户排查
+                available_ids = [p.id for p in prompts] if prompts else []
+                raise GeneratorError(
+                    f"指定的 prompt 未找到: '{prompt_id}'。"
+                    f"可用的 prompt id: {available_ids}"
+                )
 
-        # 如果没有指定或未找到，随机选择一个
+        # 如果没有指定，随机选择一个
         if not selected and prompts:
             selected = random.choice(prompts)
 
@@ -338,12 +362,12 @@ class GenerationEngine:
         
         规则：
         - 每组使用同一张参考图作为背景
-        - 组间不重复选择参考图
+        - 按参考图文件名顺序依次分配给各组（组001对应第1张参考图，组002对应第2张...）
         - 如果指定了参考图，根据 coverage 百分比决定多少组使用这张图
-        - 未指定或超出 coverage 的组随机选择（组间不重复）
+        - 参考图用完后循环复用
         
         Args:
-            reference_images: 所有可用参考图
+            reference_images: 所有可用参考图（已按文件名排序）
             group_count: 组数
             specified_image: 用户指定的单张参考图（可选）
             specified_coverage: 指定图片覆盖的组百分比
@@ -352,7 +376,6 @@ class GenerationEngine:
             每组对应的参考图列表
         """
         result = []
-        used_refs = set()
         
         # 计算指定图片覆盖的组数
         coverage_groups = int(group_count * specified_coverage / 100) if specified_image else 0
@@ -360,40 +383,27 @@ class GenerationEngine:
         if specified_image and coverage_groups > 0:
             logger.info(f"📷 指定参考图将覆盖前 {coverage_groups}/{group_count} 组 ({specified_coverage}%): {specified_image.name}")
         
+        # 构建排除指定图片后的顺序列表
+        ordered_refs = [r for r in reference_images if str(r) != str(specified_image)] if specified_image else list(reference_images)
+        
+        # 用于追踪顺序分配的索引
+        ref_index = 0
+        
         for i in range(group_count):
-            previous = result[-1] if result else None
-            
             if specified_image and i < coverage_groups:
                 # 使用指定的参考图
                 selected = specified_image
                 logger.debug(f"组{i+1} 使用指定参考图: {selected.name}")
             else:
-                # 随机选择未使用的参考图（排除已指定的图，避免重复）
-                exclude_set = used_refs.copy()
-                if specified_image:
-                    exclude_set.add(str(specified_image))
-                
-                available = [r for r in reference_images if str(r) not in exclude_set]
-                if available:
-                    if previous and len(available) > 1:
-                        # 确保与上一组不同
-                        different = [r for r in available if str(r) != str(previous)]
-                        selected = random.choice(different) if different else random.choice(available)
-                    else:
-                        selected = random.choice(available)
+                # 按顺序分配参考图
+                if ordered_refs:
+                    selected = ordered_refs[ref_index % len(ordered_refs)]
+                    ref_index += 1
                 else:
-                    # 所有参考图都用过了，复用但确保与上一组不同
-                    if previous and len(reference_images) > 1:
-                        different = [r for r in reference_images if str(r) != str(previous)]
-                        selected = random.choice(different) if different else reference_images[0]
-                    else:
-                        selected = random.choice(reference_images) if reference_images else None
+                    # 没有可用参考图，使用指定的或 None
+                    selected = specified_image
             
-            if selected:
-                result.append(selected)
-                used_refs.add(str(selected))
-            else:
-                result.append(None)
+            result.append(selected)
         
         return result
     
@@ -1063,6 +1073,16 @@ class GenerationEngine:
             text_result=text_result,
         )
         
+        # ========== 保存输入文件（如果启用）==========
+        if template_cfg.output.save_inputs:
+            self._save_inputs_for_group(
+                group_dir=group_dir,
+                group_num=group_num,
+                tasks=tasks,
+                all_selected_products=all_selected_products,
+                all_selected_references=all_selected_references,
+            )
+        
         # 保存组结果
         self.output_manager.save_group_result(group_result)
         self.state_manager.mark_group_complete(group_index, group_result)
@@ -1079,6 +1099,49 @@ class GenerationEngine:
             logger.info(f"{log_prefix} ✅ 完成 ({', '.join(stats)})")
         
         return group_result
+    
+    def _save_inputs_for_group(
+        self,
+        group_dir: Path,
+        group_num: int,
+        tasks: List[Dict],
+        all_selected_products: List[Path],
+        all_selected_references: List[Path],
+    ):
+        """
+        保存组的参考图到组目录
+        
+        结构：
+        group_dir/
+        ├── 01.png
+        ├── 02.png
+        ├── xxx_参考图.jpg
+        
+        Args:
+            group_dir: 组目录
+            group_num: 组号
+            tasks: 任务列表
+            all_selected_products: 所有选中的产品图
+            all_selected_references: 所有选中的参考图
+        """
+        import shutil
+        
+        log_prefix = f"[组{group_num}]"
+        
+        try:
+            # 复制参考图（主体迁移模式下每组共用一张参考图）
+            if all_selected_references:
+                ref_image = all_selected_references[0]
+                if ref_image and Path(ref_image).exists():
+                    # 使用原文件名 + _参考图 后缀
+                    stem = Path(ref_image).stem
+                    suffix = Path(ref_image).suffix
+                    dest_name = f"{stem}_参考图{suffix}"
+                    shutil.copy2(ref_image, group_dir / dest_name)
+                    logger.info(f"{log_prefix} 📁 已保存参考图: {dest_name}")
+            
+        except Exception as e:
+            logger.warning(f"{log_prefix} ⚠️ 保存参考图失败: {e}")
     
     def _run_concurrent_generation_v2(
         self,
@@ -1225,32 +1288,3 @@ class GenerationEngine:
         # 按索引排序返回
         return [results[i] for i in sorted(results.keys())]
     
-    def resume(self, resume_dir: Path, auto_confirm: bool = False) -> RunResult:
-        """
-        从断点恢复执行
-        
-        Args:
-            resume_dir: 之前的运行目录
-            auto_confirm: 是否自动确认（跳过用户确认提示）
-            
-        Returns:
-            运行结果
-        """
-        logger.info(f"从断点恢复: {resume_dir}")
-        
-        # 设置状态管理器
-        self.state_manager.state_dir = resume_dir
-        state = self.state_manager.load_state()
-        
-        if not state:
-            raise GeneratorError(f"无法加载状态文件: {resume_dir}")
-        
-        # 设置输出管理器
-        self.output_manager.set_run_dir(resume_dir)
-        
-        # 加载配置
-        self.config_manager.template_path = Path(state.template_config_path)
-        self._load_configs()
-        
-        # 继续执行
-        return self.run(auto_confirm=auto_confirm)
