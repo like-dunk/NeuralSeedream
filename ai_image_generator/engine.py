@@ -1174,9 +1174,10 @@ class GenerationEngine:
         images_count = len(tasks)
         log_prefix = f"[组{group_num}]"
         
-        # 重试配置
+        # 重试配置（随机指数退避，避免多用户同时重试碰撞）
         max_retries = 6  # 最大重试次数
-        retry_delay_base = 5  # 基础重试延迟（秒）
+        retry_delay_base = 3  # 基础重试延迟（秒）
+        retry_delay_max = 120  # 最大重试延迟（秒）
         
         def generate_single(task: Dict) -> Tuple[int, ImageResult]:
             """生成单张图片（带重试，受全局并发限制）"""
@@ -1188,6 +1189,7 @@ class GenerationEngine:
             task_log_prefix = f"{log_prefix}[{image_num}/{images_count}]"
             
             last_error = None
+            last_delay = retry_delay_base  # 用于 Decorrelated Jitter
             
             # 获取全局并发许可
             self._concurrent_semaphore.acquire()
@@ -1244,9 +1246,12 @@ class GenerationEngine:
                         )
                         
                         if is_retryable and attempt < max_retries:
-                            # 指数退避延迟
-                            delay = retry_delay_base * (2 ** attempt)
-                            logger.warning(f"{task_log_prefix} ⚠️ 失败: {e}，{delay}秒后重试...")
+                            # Decorrelated Jitter（随机指数退避）
+                            # 每次重试延迟基于上次延迟随机计算，避免多用户同时重试碰撞
+                            # 参考：https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+                            delay = min(retry_delay_max, random.uniform(retry_delay_base, last_delay * 3))
+                            last_delay = delay
+                            logger.warning(f"{task_log_prefix} ⚠️ 失败: {e}，{delay:.1f}秒后重试...")
                             time.sleep(delay)
                             continue
                         else:
