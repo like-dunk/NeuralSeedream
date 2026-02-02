@@ -81,7 +81,7 @@ class GlobalConfig:
 @dataclass
 class ImageSelectionConfig:
     """图片选择配置"""
-    source_dir: str
+    source_dir: Union[str, List[str]] = ""  # 单个路径或多个路径数组
     count_per_group: Union[int, List[int]] = 1  # 固定值或 [min, max]
     selection_mode: str = "random"  # random, sequential, specified
     must_include: Optional[str] = None

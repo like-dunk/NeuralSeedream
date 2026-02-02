@@ -12,7 +12,7 @@ import subprocess
 import sys
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 # 屏蔽 Python 版本相关的 FutureWarning（Google 库会警告 Python 3.9 已过期）
 warnings.filterwarnings("ignore", category=FutureWarning, module="google")
@@ -399,6 +399,114 @@ def create_engine(
     )
 
 
+def validate_specified_images_coverage(source_dirs: List[str], specified_images: List[str]) -> List[str]:
+    """
+    验证所有指定的产品图都能匹配到至少一个 source_dir
+    
+    Args:
+        source_dirs: 产品图文件夹列表
+        specified_images: 用户指定的产品图路径列表
+        
+    Returns:
+        无法匹配的图片路径列表（空列表表示全部匹配）
+    """
+    if not specified_images:
+        return []
+    
+    unmatched = []
+    for img_path in specified_images:
+        if not img_path or not img_path.strip():
+            continue
+        
+        # 检查是否匹配任意一个 source_dir
+        matched = False
+        for source_dir in source_dirs:
+            source_dir_normalized = source_dir.rstrip("/")
+            if img_path.startswith(source_dir_normalized + "/"):
+                matched = True
+                break
+        
+        if not matched:
+            unmatched.append(img_path)
+    
+    return unmatched
+
+
+def get_product_source_dirs(template_path: Path) -> List[str]:
+    """
+    从模板配置中获取产品图源目录列表
+    
+    Args:
+        template_path: 模板配置文件路径
+        
+    Returns:
+        产品图源目录列表（即使配置的是单个字符串也返回列表）
+    """
+    with open(template_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    prod_cfg = data.get("product_images", {})
+    source_dir = prod_cfg.get("source_dir", "")
+    
+    if isinstance(source_dir, list):
+        # 过滤空字符串
+        return [d for d in source_dir if d and d.strip()]
+    elif source_dir and source_dir.strip():
+        return [source_dir]
+    else:
+        return []
+
+
+def update_template_source_dir(template_path: Path, new_source_dir: str) -> Path:
+    """
+    创建临时模板配置，更新产品图源目录
+    
+    Args:
+        template_path: 原始模板配置文件路径
+        new_source_dir: 新的产品图源目录
+        
+    Returns:
+        临时模板配置文件路径
+    """
+    import tempfile
+    
+    with open(template_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    # 更新产品图源目录为单个字符串
+    data["product_images"]["source_dir"] = new_source_dir
+    
+    # 智能过滤 specified_images：只保留属于当前文件夹的图片
+    original_specified = data["product_images"].get("specified_images", [])
+    if original_specified:
+        # 确保是列表
+        if isinstance(original_specified, str):
+            original_specified = [original_specified] if original_specified.strip() else []
+        
+        # 过滤：只保留路径以当前 source_dir 开头的图片
+        # 标准化路径进行比较
+        source_dir_normalized = new_source_dir.rstrip("/")
+        filtered_specified = [
+            img for img in original_specified
+            if img and img.strip() and img.startswith(source_dir_normalized + "/")
+        ]
+        data["product_images"]["specified_images"] = filtered_specified
+    
+    # 根据新目录更新模板名称（使用文件夹名作为后缀）
+    folder_name = Path(new_source_dir).name
+    original_name = data.get("name", "生成任务")
+    # 避免重复添加后缀（如果原名称已经包含文件夹名）
+    if not original_name.endswith(f"_{folder_name}"):
+        data["name"] = f"{original_name}_{folder_name}"
+    
+    # 创建临时文件
+    fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="template_")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    return Path(temp_path)
+
+
 def main():
     """主入口"""
     parser = argparse.ArgumentParser(
@@ -417,6 +525,9 @@ def main():
   
   # 断点续传（直接传入之前的运行目录）
   python -m ai_image_generator outputs/海洋至尊_20260126_143000
+  
+  # 多产品图文件夹批量生成（在模板中配置 source_dir 为数组）
+  # "source_dir": ["产品图/海洋至尊", "产品图/化妆品2", "产品图/化妆品3"]
         """,
     )
     
@@ -524,24 +635,111 @@ def main():
             
             # 执行（会自动跳过已完成的组）
             result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
-        else:
-            # 新运行模式
-            template_path = Path(args.template)
             
-            # 创建引擎
+            # 输出结果
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+            return 0
+        
+        # 新运行模式
+        template_path = Path(args.template)
+        
+        # 检查是否有多个产品图文件夹
+        source_dirs = get_product_source_dirs(template_path)
+        
+        if len(source_dirs) <= 1:
+            # 单个文件夹，正常执行
             engine = create_engine(
                 config_path=config_path,
                 template_path=template_path,
                 api_key=args.api_key,
             )
-            
-            # 执行
             result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+            return 0
         
-        # 输出结果
-        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        # 多个产品图文件夹，循环执行
+        logger.info(f"📂 检测到 {len(source_dirs)} 个产品图文件夹，将依次执行:")
+        for i, d in enumerate(source_dirs, 1):
+            logger.info(f"   {i}. {d}")
+        print()
         
-        return 0
+        # 验证 specified_images 都能匹配到 source_dir
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_data = json.load(f)
+        specified_images = template_data.get("product_images", {}).get("specified_images", [])
+        if isinstance(specified_images, str):
+            specified_images = [specified_images] if specified_images.strip() else []
+        
+        unmatched_images = validate_specified_images_coverage(source_dirs, specified_images)
+        if unmatched_images:
+            logger.error("❌ 以下指定的产品图路径不属于任何 source_dir 文件夹:")
+            for img in unmatched_images:
+                logger.error(f"   - {img}")
+            logger.error(f"   可用的 source_dir: {source_dirs}")
+            raise GeneratorError(f"指定的产品图路径无效: {', '.join(unmatched_images)}")
+        
+        all_results = []
+        temp_files = []  # 记录临时文件，最后清理
+        
+        try:
+            for idx, source_dir in enumerate(source_dirs, 1):
+                folder_name = Path(source_dir).name
+                logger.info(f"\n{'='*60}")
+                logger.info(f"📦 [{idx}/{len(source_dirs)}] 开始处理: {folder_name}")
+                logger.info(f"{'='*60}\n")
+                
+                # 创建临时模板配置
+                temp_template = update_template_source_dir(template_path, source_dir)
+                temp_files.append(temp_template)
+                
+                # 创建引擎
+                engine = create_engine(
+                    config_path=config_path,
+                    template_path=temp_template,
+                    api_key=args.api_key,
+                )
+                
+                # 执行
+                result = engine.run(dry_run=args.dry_run, auto_confirm=args.yes)
+                all_results.append({
+                    "source_dir": source_dir,
+                    "folder_name": folder_name,
+                    "result": result.to_dict(),
+                })
+                
+                logger.info(f"\n✅ [{idx}/{len(source_dirs)}] {folder_name} 完成")
+            
+            # 输出汇总结果
+            logger.info(f"\n{'='*60}")
+            logger.info(f"🎉 全部完成！共处理 {len(source_dirs)} 个产品图文件夹")
+            logger.info(f"{'='*60}\n")
+            
+            # 汇总统计
+            total_images = sum(r["result"]["total_images"] for r in all_results)
+            successful_images = sum(r["result"]["successful_images"] for r in all_results)
+            failed_images = sum(r["result"]["failed_images"] for r in all_results)
+            total_duration = sum(r["result"]["duration_seconds"] for r in all_results)
+            
+            summary = {
+                "total_source_dirs": len(source_dirs),
+                "total_images": total_images,
+                "successful_images": successful_images,
+                "failed_images": failed_images,
+                "total_duration_seconds": total_duration,
+                "results": all_results,
+            }
+            
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            return 0
+            
+        finally:
+            # 清理临时文件
+            for temp_file in temp_files:
+                try:
+                    if temp_file.exists():
+                        temp_file.unlink()
+                except Exception:
+                    pass
     
     except GeneratorError as e:
         logger.error(f"生成错误: {e}")

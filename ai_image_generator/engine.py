@@ -375,10 +375,14 @@ class GenerationEngine:
         Returns:
             每组对应的参考图列表
         """
+        import math
         result = []
         
-        # 计算指定图片覆盖的组数
-        coverage_groups = int(group_count * specified_coverage / 100) if specified_image else 0
+        # 计算指定图片覆盖的组数（向上取整，确保有指定图片时至少覆盖1组）
+        if specified_image and specified_coverage > 0:
+            coverage_groups = max(1, math.ceil(group_count * specified_coverage / 100))
+        else:
+            coverage_groups = 0
         
         if specified_image and coverage_groups > 0:
             logger.info(f"📷 指定参考图将覆盖前 {coverage_groups}/{group_count} 组 ({specified_coverage}%): {specified_image.name}")
@@ -698,13 +702,15 @@ class GenerationEngine:
             groups=[],
         )
         
-        # 计算指定图片覆盖的组数
+        # 计算指定图片覆盖的组数（向上取整，确保有指定图片时至少覆盖1组）
+        import math
         prod_cfg = template_cfg.product_images
         specified_coverage = getattr(prod_cfg, 'specified_coverage', 100)
-        coverage_groups = int(template_cfg.group_count * specified_coverage / 100)
-        
-        if specified_product_images:
+        if specified_product_images and specified_coverage > 0:
+            coverage_groups = max(1, math.ceil(template_cfg.group_count * specified_coverage / 100))
             logger.info(f"📋 指定产品图将覆盖前 {coverage_groups}/{template_cfg.group_count} 组 ({specified_coverage}%)")
+        else:
+            coverage_groups = 0
         
         # 获取最大并发组数
         # 全局信号量已控制总并发数，组间不再需要额外限制
