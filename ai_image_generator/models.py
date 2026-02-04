@@ -150,9 +150,9 @@ class TextGenerationConfig:
 
 class GenerationTarget(Enum):
     """生成目标"""
-    IMAGE_ONLY = "image_only"  # 仅生成图片
-    TEXT_ONLY = "text_only"    # 仅生成文案
-    BOTH = "both"              # 同时生成图片和文案
+    IMAGE = "image"  # 仅生成图片
+    TEXT = "text"    # 仅生成文案
+    BOTH = "both"    # 同时生成图片和文案
 
 
 class ImageModel(Enum):
@@ -172,7 +172,7 @@ class TemplateConfig:
     images_per_group: Union[int, List[int]]  # 固定值或 [min, max]
     product_images: ImageSelectionConfig
     output: OutputConfig
-    generation_target: str = "both"  # image_only, text_only, both
+    generation_target: str = "both"  # image, text, both
     image_model: str = "nano-banana-pro"  # nano-banana-pro 或 seedream/4.5-edit
     reference_images: Optional[ImageSelectionConfig] = None
     template_variables: Dict[str, Any] = field(default_factory=dict)

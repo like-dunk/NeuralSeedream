@@ -281,6 +281,10 @@ class ConfigManager:
             if template_cfg.mode not in ["scene_generation", "subject_transfer"]:
                 errors.append(f"无效的生成模式: {template_cfg.mode}")
             
+            # 验证生成目标
+            if template_cfg.generation_target not in ["text", "image", "both"]:
+                errors.append(f"无效的生成目标: {template_cfg.generation_target}")
+            
             # 验证组数
             if template_cfg.group_count < 1:
                 errors.append("组数必须大于0")

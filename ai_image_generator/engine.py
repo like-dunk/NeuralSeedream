@@ -132,8 +132,8 @@ class GenerationEngine:
             (should_generate_images, should_generate_text)
         """
         generation_target = getattr(self._template_config, 'generation_target', 'both') or 'both'
-        should_generate_images = generation_target in ('image_only', 'both')
-        should_generate_text = generation_target in ('text_only', 'both')
+        should_generate_images = generation_target in ('image', 'both')
+        should_generate_text = generation_target in ('text', 'both')
         return should_generate_images, should_generate_text
 
     
@@ -503,7 +503,7 @@ class GenerationEngine:
                 prompts = self.image_selector.load_prompts_from_json(paths["prompts"])
                 logger.info(f"找到 {len(prompts)} 个可用 Prompt")
         else:
-            logger.info("⏭️ 跳过图片资源检查（generation_target=text_only）")
+            logger.info("⏭️ 跳过图片资源检查（generation_target=text）")
         
         # 计算每组需要的图片数量（使用最大值进行检查）
         images_per_group_cfg = template_cfg.images_per_group
@@ -823,10 +823,10 @@ class GenerationEngine:
             text_success = sum(1 for g in group_results if g.text_result and g.text_result.success)
             logger.info(f"🎉 生成完成: 图片 {successful_images}/{total_images} 张, 文案 {text_success}/{len(group_results)} 篇, 耗时 {duration:.1f}秒")
         elif should_generate_images:
-            # image_only 模式
+            # image 模式
             logger.info(f"🎉 图片生成完成: {successful_images}/{total_images} 张成功, 耗时 {duration:.1f}秒")
         else:
-            # text_only 模式
+            # text 模式
             text_success = sum(1 for g in group_results if g.text_result and g.text_result.success)
             logger.info(f"🎉 文案生成完成: {text_success}/{len(group_results)} 篇成功, 耗时 {duration:.1f}秒")
         
@@ -1021,7 +1021,7 @@ class GenerationEngine:
                 resolution=template_cfg.output.resolution,
                 output_format=template_cfg.output.format,
             )
-        # text_only 模式下不需要显示跳过图片生成的日志，因为开始日志已经说明了
+        # text 模式下不需要显示跳过图片生成的日志，因为开始日志已经说明了
         
         # ========== 文案生成部分 ==========
         if should_generate_text:
@@ -1071,7 +1071,7 @@ class GenerationEngine:
                     logger.info(f"{log_prefix} ⏭️ 文案生成未启用（text_generation.enabled=false）")
             else:
                 logger.info(f"{log_prefix} ⏭️ 文案生成器未配置")
-        # image_only 模式下不需要显示跳过文案生成的日志，因为开始日志已经说明了
+        # image 模式下不需要显示跳过文案生成的日志，因为开始日志已经说明了
         
         # ========== 创建组结果 ==========
         group_result = GroupResult(

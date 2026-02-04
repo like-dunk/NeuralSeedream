@@ -63,11 +63,14 @@
 **2. 运行**
 
 ```bash
-python3 ai_image_generator.py --dry-run    # 验证配置（推荐先执行）
+mac 电脑
 python3 ai_image_generator.py              # 执行生成
+windows 电脑
+python ai_image_generator.py              # 执行生成
 ```
 
-默认使用 `templates/generation_template.json` 配置文件。
+默认使用 `templates/generation_template.json` 配置文件
+python3 ai_image_generator.py --dry-run    # 验证配置
 
 **两种生成模式**
 
@@ -131,7 +134,7 @@ python3 ai_image_generator.py outputs/任务名_20260126_143000
 | name | 任务名称（体现在输出目录名） |
 | description | 备注说明（不影响生成） |
 | mode | 生成模式 scene_generation / subject_transfer |
-| generation_target | 生成目标 both / image_only / text_only，默认 both |
+| generation_target | 生成目标 both / image / text，默认 both |
 | image_model | 图片生成模型，见下方说明 |
 | group_count | 生成多少组 |
 | images_per_group | 每组生成多少张，固定值 4 或范围 [min, max] |
@@ -206,8 +209,8 @@ Midjourney 会生成 4 张图片，系统默认下载第一张。
 | 值 | 说明 |
 | --- | --- |
 | both | 同时生成图片和文案（默认） |
-| image_only | 仅生成图片，跳过文案生成 |
-| text_only | 仅生成文案，跳过图片生成 |
+| image | 仅生成图片，跳过文案生成 |
+| text | 仅生成文案，跳过图片生成 |
 
 **产品图配置 product_images**
 | 字段 | 说明 |
