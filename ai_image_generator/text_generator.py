@@ -125,17 +125,24 @@ class TextGenerator:
         从 JSON 文件加载参考文案，随机抽取指定数量
 
         Args:
-            category: 产品类别，用于选择对应的参考文案文件
+            category: 产品类别，用于选择对应的参考文案文件（支持前缀匹配）
 
         Returns:
             随机抽取的参考文案列表
         """
-        # 尝试加载分类文件
-        category_file = self.reference_base_dir / f"{category}产品参考.json"
-
-        # 如果分类文件不存在，尝试加载默认文件
-        if not category_file.exists():
-            logger.warning(f"分类参考文案文件不存在: {category_file}，尝试使用默认文件")
+        category_file = None
+        
+        # 前缀匹配：查找以 category 开头的 JSON 文件
+        if self.reference_base_dir.exists():
+            for f in self.reference_base_dir.glob("*.json"):
+                if f.stem.startswith(category):
+                    category_file = f
+                    logger.info(f"前缀匹配到参考文案文件: {f.name}（类别：{category}）")
+                    break
+        
+        # 如果前缀匹配失败，尝试加载默认文件
+        if category_file is None:
+            logger.warning(f"未找到以 '{category}' 开头的参考文案文件，尝试使用默认文件")
             category_file = self.reference_base_dir / "美妆产品参考.json"
 
         if not category_file.exists():

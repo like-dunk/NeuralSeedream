@@ -477,7 +477,14 @@ class GenerationEngine:
         should_generate_images, should_generate_text = self._get_generation_flags()
         generation_target = getattr(template_cfg, 'generation_target', 'both') or 'both'
         
-        logger.info(f"开始生成: {template_cfg.name}, 模式={template_cfg.mode}, 目标={generation_target}, 组数={template_cfg.group_count}")
+        # 将 generation_target 转换为友好的中文显示
+        target_display = {
+            'text': '仅生成文案',
+            'image': '仅生成图片', 
+            'both': '图文生成'
+        }.get(generation_target, generation_target)
+        
+        logger.info(f"开始生成: {template_cfg.name}, 模式={template_cfg.mode}, 目标={target_display}, 组数={template_cfg.group_count}")
         
         # 验证配置
         errors = self.config_manager.validate_config()
