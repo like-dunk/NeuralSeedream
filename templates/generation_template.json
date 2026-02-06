@@ -2,18 +2,13 @@
   "name": "海洋至尊",
   "description": "AI图片生成配置",
   "mode": "subject_transfer",
-  "generation_target": "both",
+  "generation_target": "text",
   "image_model": "seedream/4.5-edit",
-  "group_count": 10,
-  "images_per_group": [
-    3,
-    5
-  ],
+  "group_count": 5,
+  "images_per_group": [3, 5],
   "product_images": {
     "source_dir": "产品图/化妆品3",
-    "specified_images": [
-      ""
-    ],
+    "specified_images": [""],
     "specified_coverage": 50
   },
   "reference_images": {
@@ -36,26 +31,68 @@
     "aspect_ratio": "4:5",
     "resolution": "2K",
     "format": "png",
-    "max_concurrent_groups": 500,
-    "generate_text": true
+    "max_concurrent_groups": 500
   },
   "text_generation": {
     "enabled": true,
-    "max_few_shot_examples": 5,
+    "reference_samples": [3, 5],
+    "product_info": {
+      "product_name": "护肤套装",
+      "brand": "海洋至尊",
+      "category": "化妆品+水乳",
+      "style": "清新自然",
+      "sellpoint": "逆天的滋补炸爽",
+      "target_audience": "年轻女性",
+      "features": "保湿滋润、温和不刺激"
+    },
     "tags": [
       "敏卓美妆",
       "护肤分享",
       "补水保湿",
       "温和护肤",
       "好物推荐"
+    ],
+    "opening_styles": [
+      {
+        "name": "提问式",
+        "description": "以一个引发共鸣的问题开头，吸引读者思考",
+        "example": "你有没有遇到过xxx的困扰？"
+      },
+      {
+        "name": "惊喜发现式",
+        "description": "表达意外发现好物的惊喜感",
+        "example": "没想到这么xxx的产品居然..."
+      },
+      {
+        "name": "场景代入式",
+        "description": "描述一个具体的使用场景，让读者有代入感",
+        "example": "每天早上洗完脸的时候..."
+      },
+      {
+        "name": "直接推荐式",
+        "description": "开门见山，直接表达推荐态度",
+        "example": "姐妹们！这个必须安利给你们！"
+      },
+      {
+        "name": "对比测评式",
+        "description": "通过对比其他产品来突出优势",
+        "example": "用过xx个品牌，只有这个..."
+      },
+      {
+        "name": "个人故事式",
+        "description": "以个人经历开头，讲述使用前后的变化",
+        "example": "作为一个xxx，我一直在找..."
+      },
+      {
+        "name": "清单盘点式",
+        "description": "以盘点/清单的形式呈现",
+        "example": "我的年度爱用物来啦！"
+      },
+      {
+        "name": "感叹赞美式",
+        "description": "以感叹句开头，表达对产品的喜爱",
+        "example": "天哪这也太好用了吧！"
+      }
     ]
-  },
-  "template_variables": {
-    "product_name": "护肤套装",
-    "brand": "海洋至尊",
-    "category": "美妆",
-    "style": "清新自然",
-    "target_audience": "年轻女性",
-    "features": "保湿滋润、温和不刺激"
   }
 }

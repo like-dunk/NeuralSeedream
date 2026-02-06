@@ -11,6 +11,7 @@ from .exceptions import ConfigurationError, PathNotFoundError
 from .models import (
     GlobalConfig,
     ImageSelectionConfig,
+    OpeningStyle,
     OutputConfig,
     ScenePromptConfig,
     TransferPromptConfig,
@@ -238,9 +239,38 @@ class ConfigManager:
         
         # 解析文案生成配置
         text_gen_cfg = data.get("text_generation", {})
+        
+        # 解析开头风格列表
+        opening_styles_data = text_gen_cfg.get("opening_styles", [])
+        opening_styles = [
+            OpeningStyle(
+                name=style.get("name", ""),
+                description=style.get("description", ""),
+                example=style.get("example", "")
+            )
+            for style in opening_styles_data
+        ]
+        
+        # 解析产品信息（优先从 text_generation.product_info 读取，向后兼容 template_variables）
+        product_info = text_gen_cfg.get("product_info", data.get("template_variables", {}))
+        
+        # 解析参考文案抽取数量
+        # 支持两种格式：[3, 5] 表示随机范围，4 表示固定数量
+        reference_samples_raw = text_gen_cfg.get("reference_samples", [3, 5])
+        if isinstance(reference_samples_raw, int):
+            # 固定数量：转换为 [n, n]
+            reference_samples = [reference_samples_raw, reference_samples_raw]
+        elif isinstance(reference_samples_raw, list) and len(reference_samples_raw) == 2:
+            reference_samples = reference_samples_raw
+        else:
+            reference_samples = [3, 5]
+        
         text_generation = TextGenerationConfig(
             enabled=text_gen_cfg.get("enabled", True),
             tags=text_gen_cfg.get("tags", []),
+            opening_styles=opening_styles,
+            product_info=product_info,
+            reference_samples=reference_samples,
         )
         
         self._template_config = TemplateConfig(

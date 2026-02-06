@@ -1037,16 +1037,26 @@ class GenerationEngine:
                 if text_gen_cfg and text_gen_cfg.enabled:
                     logger.info(f"{log_prefix} 📝 开始生成文案...")
                     try:
+                        # 优先从 text_generation.product_info 读取，向后兼容 template_variables
+                        product_info_source = text_gen_cfg.product_info if text_gen_cfg.product_info else template_cfg.template_variables
                         product_info = {
-                            "product_name": template_cfg.template_variables.get("product_name", template_cfg.name),
-                            "brand": template_cfg.template_variables.get("brand", ""),
-                            "category": template_cfg.template_variables.get("category", "美妆"),
-                            "style": template_cfg.template_variables.get("style", "种草分享"),
-                            "features": template_cfg.template_variables.get("features", ""),
-                            "target_audience": template_cfg.template_variables.get("target_audience", "年轻女性"),
+                            "product_name": product_info_source.get("product_name", template_cfg.name),
+                            "brand": product_info_source.get("brand", ""),
+                            "category": product_info_source.get("category", "美妆"),
+                            "style": product_info_source.get("style", "种草分享"),
+                            "features": product_info_source.get("features", ""),
+                            "target_audience": product_info_source.get("target_audience", "年轻女性"),
                         }
                         
-                        text_data = self.text_generator.generate_sync(product_info)
+                        # 将 opening_styles 转换为字典列表传递
+                        opening_styles = None
+                        if text_gen_cfg.opening_styles:
+                            opening_styles = [
+                                {"name": s.name, "description": s.description, "example": s.example}
+                                for s in text_gen_cfg.opening_styles
+                            ]
+                        
+                        text_data = self.text_generator.generate_sync(product_info, opening_styles=opening_styles)
                         content = self._remove_ai_tags(text_data.content)
 
                         text_result = TextResult(
@@ -1055,7 +1065,7 @@ class GenerationEngine:
                             success=text_data.success,
                             error=text_data.error,
                         )
-                        logger.info(f"{log_prefix} 📝 文案生成成功: {text_data.title[:30]}...")
+                        logger.info(f"{log_prefix} 📝 文案生成成功: {text_data.content[:30]}...")
 
                         # 保存文案到文件
                         text_file = group_dir / "text.txt"

@@ -3,9 +3,9 @@
 # 产品信息
 - 产品名称：{{ product_name }}
 {% if brand %}- 品牌：{{ brand }}{% endif %}
-{% if category %}- 产品类别：{{ category }}{% endif %}
 - 文案风格：{{ style }}
 {% if features %}- 产品特点：{{ features }}{% endif %}
+{% if sellpoint %}- 营销点：{{ sellpoint }}{% endif %}
 - 目标受众：{{ target_audience }}
 {% if context %}
 - 额外信息：{{ context }}
@@ -18,6 +18,13 @@
 {{ loop.index }}. 标题：{{ example.title }}
    文案：{{ example.text[:200] }}...
 {% endfor %}
+
+# 本次创作风格指令 ⭐
+本次请采用「{{ opening_style.name }}」风格开头：
+- 风格说明：{{ opening_style.description }}
+- 参考句式：{{ opening_style.example }}
+
+请务必按照上述风格来写文案开头，不要使用其他风格！
 
 # 创作要求
 1. **标题要求**：

@@ -142,10 +142,21 @@ class OutputConfig:
 
 
 @dataclass
+class OpeningStyle:
+    """文案开头风格"""
+    name: str
+    description: str
+    example: str
+
+
+@dataclass
 class TextGenerationConfig:
     """文案生成配置"""
     enabled: bool = True
     tags: List[str] = field(default_factory=list)  # 用户自定义标签列表
+    opening_styles: List[OpeningStyle] = field(default_factory=list)  # 文案开头风格列表
+    product_info: Dict[str, Any] = field(default_factory=dict)  # 产品信息
+    reference_samples: List[int] = field(default_factory=lambda: [3, 5])  # 参考文案抽取数量 [最小, 最大]
 
 
 class GenerationTarget(Enum):

@@ -422,6 +422,15 @@ def create_engine(
     # 文案生成器（如果配置了 OpenRouter）
     text_generator = None
     if global_config.openrouter_api_key:
+        # 优先使用 template 配置中的 reference_samples，否则使用全局配置
+        text_gen_cfg = template_config.text_generation
+        if text_gen_cfg and text_gen_cfg.reference_samples:
+            ref_min = text_gen_cfg.reference_samples[0]
+            ref_max = text_gen_cfg.reference_samples[1]
+        else:
+            ref_min = global_config.reference_min_samples
+            ref_max = global_config.reference_max_samples
+        
         text_generator = TextGenerator(
             api_key=global_config.openrouter_api_key,
             base_url=global_config.openrouter_base_url,
@@ -429,14 +438,9 @@ def create_engine(
             site_url=global_config.openrouter_site_url,
             site_name=global_config.openrouter_site_name,
             proxy=global_config.openrouter_proxy or None,
-            reference_min_samples=global_config.reference_min_samples,
-            reference_max_samples=global_config.reference_max_samples,
+            reference_min_samples=ref_min,
+            reference_max_samples=ref_max,
         )
-        
-        # 加载 Few-shot 样本
-        text_gen_cfg = template_config.text_generation
-        if text_gen_cfg:
-            pass
     
     # 创建引擎
     return GenerationEngine(

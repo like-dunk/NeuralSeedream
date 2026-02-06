@@ -29,7 +29,7 @@ class TextGenerator:
         model: str = "google/gemini-3-flash-preview",
         site_url: Optional[str] = None,
         site_name: Optional[str] = None,
-        temperature: float = 0.8,
+        temperature: float = 0.95,
         max_retries: int = 3,
         prompt_template_path: Optional[str] = None,
         reference_json_path: Optional[str] = None,
@@ -66,6 +66,11 @@ class TextGenerator:
         self.proxy = proxy
         self.reference_min_samples = reference_min_samples
         self.reference_max_samples = reference_max_samples
+
+        # 已使用的参考文案索引追踪（按类别分组）
+        self._used_indices: Dict[str, set] = {}
+        # 参考文案缓存（按类别分组）
+        self._reference_cache: Dict[str, List[Dict[str, str]]] = {}
 
         # 模板和参考文案路径
         self.prompt_template_path = Path(prompt_template_path) if prompt_template_path else Path("prompts/text_template.j2")
@@ -122,13 +127,68 @@ class TextGenerator:
     
     def _load_reference_examples(self, category: str = "美妆") -> List[Dict[str, str]]:
         """
-        从 JSON 文件加载参考文案，随机抽取指定数量
+        从 JSON 文件加载参考文案，随机抽取指定数量（确保不重复）
 
         Args:
             category: 产品类别，用于选择对应的参考文案文件（支持前缀匹配）
 
         Returns:
-            随机抽取的参考文案列表
+            随机抽取的参考文案列表（与之前抽取的不重复）
+        """
+        # 初始化该类别的已使用索引集合
+        if category not in self._used_indices:
+            self._used_indices[category] = set()
+        
+        # 尝试从缓存获取完整的参考文案列表
+        if category in self._reference_cache:
+            all_examples = self._reference_cache[category]
+        else:
+            # 首次加载，从文件读取
+            all_examples = self._load_reference_file(category)
+            self._reference_cache[category] = all_examples
+        
+        if not all_examples:
+            return []
+        
+        total_count = len(all_examples)
+        used_indices = self._used_indices[category]
+        
+        # 计算可用的索引
+        available_indices = set(range(total_count)) - used_indices
+        
+        # 如果可用的不够了，重置已使用索引（循环使用）
+        if len(available_indices) < self.reference_min_samples:
+            logger.info(f"参考文案已用完，重置索引（类别：{category}）")
+            self._used_indices[category] = set()
+            available_indices = set(range(total_count))
+        
+        # 随机决定抽取数量
+        sample_count = random.randint(
+            self.reference_min_samples, 
+            min(self.reference_max_samples, len(available_indices))
+        )
+        
+        # 从可用索引中随机抽取
+        selected_indices = random.sample(list(available_indices), sample_count)
+        
+        # 记录已使用的索引
+        self._used_indices[category].update(selected_indices)
+        
+        # 返回选中的参考文案
+        sampled_data = [all_examples[i] for i in selected_indices]
+        logger.info(f"从 {total_count} 条参考文案中抽取了 {len(sampled_data)} 条（类别：{category}，已用 {len(self._used_indices[category])}/{total_count}）")
+        
+        return sampled_data
+    
+    def _load_reference_file(self, category: str) -> List[Dict[str, str]]:
+        """
+        从文件加载参考文案（内部方法）
+        
+        Args:
+            category: 产品类别
+            
+        Returns:
+            完整的参考文案列表
         """
         category_file = None
         
@@ -165,16 +225,7 @@ class TextGenerator:
                     data = json.loads(raw_fixed)
 
             if isinstance(data, list):
-                total_count = len(data)
-                # 随机决定抽取数量（使用配置的min/max值）
-                sample_count = random.randint(
-                    self.reference_min_samples, 
-                    min(self.reference_max_samples, total_count)
-                )
-                # 随机抽取
-                sampled_data = random.sample(data, sample_count) if total_count >= sample_count else data
-                logger.info(f"从 {total_count} 条参考文案中随机抽取了 {len(sampled_data)} 条（类别：{category}）")
-                return sampled_data
+                return data
             else:
                 logger.warning("参考文案 JSON 格式不正确，应为数组")
                 return []
@@ -182,16 +233,88 @@ class TextGenerator:
             logger.error(f"加载参考文案失败: {e}")
             return []
     
+    def reset_used_references(self, category: Optional[str] = None):
+        """
+        重置已使用的参考文案索引
+        
+        Args:
+            category: 指定类别，None 表示重置所有类别
+        """
+        if category:
+            self._used_indices[category] = set()
+        else:
+            self._used_indices.clear()
+        logger.info(f"已重置参考文案使用记录{'（类别：' + category + '）' if category else ''}")
+    
+    # 默认文案开头风格列表（当配置中未指定时使用）
+    DEFAULT_OPENING_STYLES = [
+        {
+            "name": "提问式",
+            "description": "以一个引发共鸣的问题开头，吸引读者思考",
+            "example": "你有没有遇到过xxx的困扰？"
+        },
+        {
+            "name": "惊喜发现式",
+            "description": "表达意外发现好物的惊喜感",
+            "example": "没想到这么xxx的产品居然..."
+        },
+        {
+            "name": "场景代入式",
+            "description": "描述一个具体的使用场景，让读者有代入感",
+            "example": "每天早上洗完脸的时候..."
+        },
+        {
+            "name": "直接推荐式",
+            "description": "开门见山，直接表达推荐态度",
+            "example": "姐妹们！这个必须安利给你们！"
+        },
+        {
+            "name": "对比测评式",
+            "description": "通过对比其他产品来突出优势",
+            "example": "用过xx个品牌，只有这个..."
+        },
+        {
+            "name": "个人故事式",
+            "description": "以个人经历开头，讲述使用前后的变化",
+            "example": "作为一个xxx，我一直在找..."
+        },
+        {
+            "name": "清单盘点式",
+            "description": "以盘点/清单的形式呈现",
+            "example": "我的年度爱用物来啦！"
+        },
+        {
+            "name": "感叹赞美式",
+            "description": "以感叹句开头，表达对产品的喜爱",
+            "example": "天哪这也太好用了吧！"
+        },
+    ]
+    
+    def _get_random_opening_style(self, custom_styles: Optional[List[Dict[str, str]]] = None) -> Dict[str, str]:
+        """
+        随机获取一种开头风格
+        
+        Args:
+            custom_styles: 用户自定义的风格列表，如果为空则使用默认列表
+        """
+        styles = custom_styles if custom_styles else self.DEFAULT_OPENING_STYLES
+        return random.choice(styles)
+    
     def _render_prompt_template(
         self,
         product_info: Dict[str, Any],
         reference_examples: List[Dict[str, str]],
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        opening_styles: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """使用 Jinja2 渲染提示词模板"""
         try:
             env = self._get_jinja_env()
             template = env.get_template(self.prompt_template_path.name)
+            
+            # 随机选择一种开头风格
+            opening_style = self._get_random_opening_style(opening_styles)
+            logger.info(f"本次文案风格: {opening_style['name']}")
 
             # 构建模板变量
             template_vars = {
@@ -203,6 +326,7 @@ class TextGenerator:
                 "target_audience": product_info.get("target_audience", "年轻女性"),
                 "reference_examples": reference_examples,
                 "context": context,
+                "opening_style": opening_style,
             }
 
             return template.render(**template_vars)
@@ -292,7 +416,7 @@ class TextGenerator:
                                 await asyncio.sleep(2 * (attempt + 1))
                                 continue
 
-                        logger.info(f"文案生成成功: {text_result.title[:30]}...")
+                        logger.info(f"标题生成成功: {text_result.title[:30]}...")
                         return text_result
                     else:
                         logger.warning(f"JSON 解析失败或缺少字段: {content[:200]}")
@@ -313,6 +437,7 @@ class TextGenerator:
         self,
         product_info: Dict[str, Any],
         context: Optional[str] = None,
+        opening_styles: Optional[List[Dict[str, str]]] = None,
     ) -> TextResult:
         """
         生成标题和文案
@@ -320,6 +445,7 @@ class TextGenerator:
         Args:
             product_info: 产品信息字典，包含 product_name, brand, category, style 等
             context: 额外上下文信息
+            opening_styles: 用户自定义的开头风格列表
 
         Returns:
             TextResult 对象，包含 title, content, success, error
@@ -339,7 +465,7 @@ class TextGenerator:
         reference_examples = self._load_reference_examples(category)
 
         # 渲染提示词模板
-        full_prompt = self._render_prompt_template(product_info, reference_examples, context)
+        full_prompt = self._render_prompt_template(product_info, reference_examples, context, opening_styles)
 
         # 先尝试直连
         result = await self._generate_with_client(self.client, full_prompt, product_info, use_proxy=False)
@@ -369,6 +495,7 @@ class TextGenerator:
         self,
         product_info: Dict[str, Any],
         context: Optional[str] = None,
+        opening_styles: Optional[List[Dict[str, str]]] = None,
     ) -> TextResult:
         """同步版本的生成方法"""
-        return asyncio.run(self.generate(product_info, context))
+        return asyncio.run(self.generate(product_info, context, opening_styles))
