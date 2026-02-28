@@ -24,6 +24,7 @@ def _safe_slug(s: str) -> str:
 
 class OutputManager:
     """输出管理器"""
+    ALL_IMAGES_DIR_NAME = "All_images"
     
     def __init__(self, base_dir: Path, run_name: str):
         """
@@ -45,6 +46,10 @@ class OutputManager:
         Returns:
             运行目录路径
         """
+        if self.run_dir:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            return self.run_dir
+
         safe_name = _safe_slug(self.run_name)
         dir_name = f"{safe_name}_{self.timestamp}"
         self.run_dir = self.base_dir / dir_name
@@ -92,6 +97,39 @@ class OutputManager:
         group_dir = self.create_group_directory(group_num)
         filename = f"{image_num:02d}.{extension.lstrip('.')}"
         return group_dir / filename
+
+    def create_all_images_directory(self) -> Path:
+        """
+        创建本次运行的图片汇总目录
+
+        Returns:
+            汇总目录路径
+        """
+        run_dir = self.get_run_dir()
+        all_images_dir = run_dir / self.ALL_IMAGES_DIR_NAME
+        all_images_dir.mkdir(parents=True, exist_ok=True)
+        return all_images_dir
+
+    def get_all_images_output_path(
+        self,
+        group_num: int,
+        image_num: int,
+        extension: str = "png",
+    ) -> Path:
+        """
+        获取本次运行图片汇总目录中的输出路径
+
+        Args:
+            group_num: 组号（从1开始）
+            image_num: 图片号（从1开始）
+            extension: 文件扩展名
+
+        Returns:
+            汇总目录中的输出文件路径
+        """
+        all_images_dir = self.create_all_images_directory()
+        filename = f"g{group_num:03d}_i{image_num:02d}.{extension.lstrip('.')}"
+        return all_images_dir / filename
     
     def save_generation_log(self, log: GenerationLog):
         """

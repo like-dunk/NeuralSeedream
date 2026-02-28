@@ -4,6 +4,7 @@
 
 import logging
 import random
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1009,12 +1010,18 @@ class GenerationEngine:
                     image_num=image_num,
                     extension=template_cfg.output.format,
                 )
+                all_images_output_path = self.output_manager.get_all_images_output_path(
+                    group_num=group_num,
+                    image_num=image_num,
+                    extension=template_cfg.output.format,
+                )
                 
                 tasks.append({
                     "image_index": image_index,
                     "image_num": image_num,
                     "prompt": rendered_prompt,
                     "output_path": output_path,
+                    "all_images_output_path": all_images_output_path,
                     "image_urls": fresh_urls,
                     "product_image": prod_img,
                     "reference_image": ref_img,
@@ -1209,6 +1216,7 @@ class GenerationEngine:
             image_num = task["image_num"]
             prompt = task["prompt"]
             output_path = task["output_path"]
+            all_images_output_path = task.get("all_images_output_path")
             image_urls = task["image_urls"]
             task_log_prefix = f"{log_prefix}[{image_num}/{images_count}]"
             
@@ -1238,6 +1246,13 @@ class GenerationEngine:
                             output_format=output_format,
                             log_prefix=task_log_prefix,
                         )
+
+                        if all_images_output_path:
+                            try:
+                                all_images_output_path.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(output_path, all_images_output_path)
+                            except Exception as copy_err:
+                                logger.warning(f"{task_log_prefix} ⚠️ 写入 All_images 失败: {copy_err}")
                         
                         logger.info(f"{task_log_prefix} ✅ 完成")
                         

@@ -122,6 +122,8 @@ python3 ai_image_generator.py outputs/任务名_20260126_143000
 | outputs/任务名_时间戳/ | 任务输出目录 |
 | outputs/任务名_时间戳/001/ | 第1组 |
 | outputs/任务名_时间戳/001/image_1.png | 生成的图片 |
+| outputs/任务名_时间戳/All_images/ | 本次运行所有 AI 生成图片汇总 |
+| outputs/任务名_时间戳/All_images/g001_i01.png | 汇总目录中的图片（组号+图片号命名） |
 | outputs/任务名_时间戳/001/text.txt | 生成的文案 |
 | outputs/任务名_时间戳/generation_log.json | 生成日志 |
 | outputs/任务名_时间戳/results.json | 结果汇总 |
